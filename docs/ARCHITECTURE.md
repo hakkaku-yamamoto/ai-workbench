@@ -77,7 +77,56 @@ Orchestrator は、人間の指示を受けて作業全体を統括する唯一�
 5. **承認の仲介**：承認が必要な操作に到達したら、自分で実行せず人間に承認を求める
 6. **集約報告**：全体の結果を [reporting.md](../.claude/rules/reporting.md) の形式でまとめる
 
-### 2.2 制約
+### 2.2 承認範囲の引き継ぎ（一括承認の運用）
+
+タスクスコープ承認（[../.claude/rules/approval.md](../.claude/rules/approval.md) 第 7 節）を
+受けた作業では、Orchestrator が範囲の管理者になる。
+
+```
+人間
+ │  タスクスコープ承認（7 項目を宣言して 1 回承認）
+ ▼
+Orchestrator
+ │  1. 7 項目が揃っているか検証（欠けていれば作業を始めず確認）
+ │  2. タスク全体を分解
+ │  3. 各エージェントに「担当分の範囲」だけを引き継ぐ
+ ▼
+専門エージェント（Architect / Developer / Security / Tester / Reviewer / Documenter）
+ │  範囲内で作業 → 結果を返す
+ │  範囲外が必要 → 実行せず Orchestrator へ報告
+ ▼
+Orchestrator
+ │  成果物を検証 → 完了条件と照合 → 集約報告
+ ▼
+人間
+    成果物を確認し、修正指示または取り込みを判断
+```
+
+**引き継ぎ時に各エージェントへ渡すもの**
+
+| 項目 | 内容 |
+| :- | :- |
+| 担当する作業 | そのエージェントが行うこと |
+| 変更を許可するファイル | **全体の範囲ではなく、担当分だけ**を渡す |
+| 変更禁止の対象 | 範囲内に見えても触らないもの |
+| 完了条件 | 何をもって担当分の完了とするか |
+| STOP 条件 | approval.md 7-5 の 9 条件 |
+
+**最小権限の原則**：全体の承認範囲をそのまま各エージェントに渡さない。
+Developer が設定ファイルを触る必要がないなら、その範囲を渡さない。
+エージェント単位のツール制限（`tools` / `disallowedTools`）も併用する（8.2 の課題 5）。
+
+**範囲の自己拡大の禁止**
+
+- 専門エージェントは引き継がれた範囲を超えられない。
+- Orchestrator も人間が承認した範囲を超えられない。
+- 複数エージェントの作業の合計が承認範囲を超えてもならない。
+  各エージェントが「自分の担当分は範囲内」と判断しても、
+  全体として範囲外に出ていれば違反である。この整合は Orchestrator が確認する。
+- 現時点でこの照合は**エージェントの判断に依存しており、機械的に強制されていない**
+  （第 9 節）。
+
+### 2.3 制約
 
 - 他エージェントの報告を無検証で事実として扱わない。「できた」と言われても成果物を確認する。
 - エージェント間の報告が矛盾した場合、推測で調停せず人間に報告する。
@@ -273,8 +322,14 @@ Claude Code の `settings.json` は以下の優先順位で解決される（高
 - `permissions.allow` / `permissions.ask` / `permissions.deny` の各リストは、上書きではなく**マージ**される。
 - `permissions.allow` と `permissions.additionalDirectories` は、**ワークスペースの信頼（trust）を承認するまで適用されない。**
 - `permissions.deny` と `permissions.ask` は**即時適用される。**
-- このため本リポジトリの `settings.json` は、`allow` を空にし、`deny` と `ask` のみで構成している。
-  共有ファイルで確実に効く手段だけを使う設計である。
+- このため本リポジトリの `settings.json` は、**保護を `deny` と `ask` だけで成立させている。**
+  `allow` にはブランチ作成と `git fetch` のみ（5 件）を置いている。
+  trust 承認が得られない環境では `allow` が効かず確認プロンプトが増えるが、
+  **保護の強さは変わらない。** 共有ファイルで確実に効く手段に保護を依存させる設計である。
+- **プロジェクトごとに中身が違う操作は共通配布の `allow` に入れない。**
+  `npm run <script>`、依存インストール、テスト実行などは、各プロジェクトで
+  中身を検証してから、そのプロジェクトの設定で狭く許可する
+  （[../.claude/rules/safety.md](../.claude/rules/safety.md) 5-1 / 5-2）。
 
 **個別の許可は各開発者の `.claude/settings.local.json` で持つ。**
 `ask` の確認プロンプトが業務上過剰だと感じる操作（例：`npx tsc --noEmit` のような
@@ -428,7 +483,14 @@ ai-workbench-private（Private・将来）
 | :- | :- |
 | `deny` | 承認があっても実行させない層。破壊的操作、本番相当の変更、権限変更、`main` への push、PR merge |
 | `ask` | 人間の個別承認を得て実行する層。読み取り・診断を含む調査操作もここに置く |
-| `allow` | 空。共有ファイルの `allow` は trust 承認まで適用されないため使わない |
+| `allow` | ブランチ作成と `git fetch` のみ（5 件）。挙動がツール側で固定され作業ツリーを変更しないものに限る。保護をここに依存させない |
+| `defaultMode` | `acceptEdits`。許可範囲内のファイル編集と `mkdir` / `touch` / `cp` 等を確認なしで進める。`ask` と `deny` はモードに関わらず評価されるため、保護は弱まらない。配布時の前提条件は第 10 節 |
+
+**共通配布の `allow` に入れないもの**：`npm run <script>` 等のプロジェクト定義
+スクリプト、依存インストール（`preinstall` / `postinstall` が走る）、
+テスト実行、フォーマッタ、`git add` の無条件許可、`git stash` 系、外部通信。
+理由と代替手段（プロジェクト固有の事前検証方式）は
+[../.claude/rules/safety.md](../.claude/rules/safety.md) 5-1 / 5-2 に記載する。
 
 **読み取り専用の操作を `deny` に入れない。**
 `deny` は `allow` で例外を作れないため、承認による回復手段と、
@@ -486,7 +548,7 @@ Read/Edit ルールの適用範囲、`.env.*` 列挙の非網羅性、PowerShell
 | STEP 1B | 共通ルール、permission ガード、設計書の作成 | 完了 |
 | STEP 1C | 作成物の監査（矛盾・過剰制限・公式仕様との整合性） | 完了 |
 | **STEP 1D** | **監査結果の反映（層の整理、`deny` の見直し、配布方式の修正）** | **本工程** |
-| STEP 2 | Hooks の実装（`PreToolUse` による決定論的遮断、秘密情報混入の検査、`main` 保護の二重化） | 未着手 |
+| STEP 2 | **承認GATE の強制（Hooks）**。`PreToolUse` による決定論的遮断、承認範囲の照合、秘密情報混入の検査、`main` 保護の二重化。設計は第 9 節 | 未着手 |
 | STEP 3 | エージェント定義（`.claude/agents/`：Orchestrator + 6 役割。UI/UX Designer の追加を検討：8.4.1） | 未着手 |
 | STEP 4 | スキル定義（`.claude/skills/`：定型手順の整理。ブランド調査 / デザインシステム作成 / 画面レビューを含む：8.4.2） | 未着手 |
 | STEP 5 | 配布方式の実装（ルール＝同期スクリプト、エージェント・スキル＝Plugin） | 未着手 |
@@ -496,6 +558,7 @@ Read/Edit ルールの適用範囲、`.env.*` 列挙の非網羅性、PowerShell
 ### 8.1 STEP 2（Hooks）の実装候補
 
 本工程では Hooks を作成しない。次工程の候補として以下を記録する。
+**承認GATE の強制を含めた全体設計は第 9 節にある。** 以下はその一部である。
 
 | Hook | イベント | 目的 | 想定動作 |
 | :- | :- | :- | :- |
@@ -601,5 +664,305 @@ Read/Edit ルールの適用範囲、`.env.*` 列挙の非網羅性、PowerShell
      設定できる形にするかの判断
    - スキル化する場合、9-3（大規模な新規 UI の 3 案提示と承認）が
      スキル未呼び出し時に抜け落ちない担保の設計
-   - 移行後に第 9 節が実際に適用されるかの検証方法
+   - 移行後に `quality.md` 第 9 節が実際に適用されるかの検証方法
    - 判断時期は STEP 3 / STEP 4。本工程では実施しない
+
+---
+
+## 9. 承認GATE の強制（Hooks）
+
+[../.claude/rules/approval.md](../.claude/rules/approval.md) 第 7 節のタスクスコープ承認を、
+文書上の方針から**機械的に強制される仕組み**へ移すための設計。
+**本工程では実装しない。** STEP 2 の対象である。
+
+### 9.1 なぜ Hooks が必要か（`ask` では自動化できない）
+
+公式仕様に 2 つの決定的な制約がある。
+
+1. **`ask` は `allow` より優先される。**
+   より具体的な `allow` が一致していても、`ask` に一致すれば確認が出る。
+2. **`PreToolUse` Hook が `"allow"` を返しても `ask` は回避できない。**
+   Claude Code は Hook の戻り値に関わらず `deny` と `ask` を評価する。
+
+したがって「`ask` を残したまま、Hook が承認済みタスクだと判定して自動で通す」
+という実装は**成立しない。**
+
+取りうる構成は 1 つである。
+
+| 現在（`ask` 方式） | 移行後（Hook 方式） |
+| :- | :- |
+| Git 書き込みを `ask` に置き、**人間が見張る** | Git 書き込みを `ask` から外し、**Hook が exit 2 で止める** |
+| 自動化できない | 範囲内なら自動で進み、範囲外は機械的に止まる |
+| 範囲の照合はエージェントの判断 | 範囲の照合は Hook のコード |
+
+公式ドキュメントもこの構成を案内している
+（「数個をブロックしつつ全 Bash コマンドを確認なしで実行するには、
+`Bash` を `allow` に入れ、それらを拒否する `PreToolUse` Hook を登録する」）。
+Hook の exit 2 は `allow` より優先されるため、遮断側が必ず勝つ。
+
+**この移行は「保護を外す」ことではなく「保護の実装を人間から機械へ移す」ことである。**
+Hook が先に動いていなければ、`ask` を外してはならない。
+
+### 9.2 承認済みタスクの表現
+
+Hook が照合するための、承認範囲の機械可読な表現が必要になる。
+
+| 項目 | 用途 |
+| :- | :- |
+| タスク ID | どの承認かを特定する |
+| 対象リポジトリ（`owner/repo`） | 他リポジトリへの操作を遮断する |
+| 作業ブランチ | push 先の照合に使う |
+| base ブランチ | PR 作成時の照合に使う |
+| 変更を許可するパスのパターン | 対象外ファイルへの変更を遮断する |
+| 変更禁止のパスのパターン | 許可パターンより優先して遮断する |
+| 許可する Git 操作（commit / push / PR 作成） | 承認に含まれない操作を遮断する |
+| 完了条件・テストコマンド | commit 前のテスト実行確認に使う |
+| 有効期限または失効条件 | 承認の使い回しを防ぐ |
+
+**置き場所の検討事項**：
+リポジトリ内に置くとエージェント自身が書き換えられてしまう。
+`.claude/` 配下に置く場合、Hook ファイルと承認ファイルの両方を
+変更から保護する設計が必要になる（9.5）。
+
+### 9.3 実装する Hook（検討内容）
+
+| Hook | イベント | 遮断する対象 | 判定方法 |
+| :- | :- | :- | :- |
+| `scope-repo-guard` | `PreToolUse`（Bash / PowerShell） | 承認外リポジトリへの操作 | `git remote get-url origin` と承認の対象リポジトリを照合。不一致なら exit 2 |
+| `scope-branch-guard` | `PreToolUse`（Bash / PowerShell） | 承認外ブランチへの push | push コマンドを解析し、push 先 ref と承認の作業ブランチを照合 |
+| `block-main-push` | `PreToolUse`（Bash / PowerShell） | 既定ブランチへの直接 push | 文字列パターンに依存せず、push 先が既定ブランチなら exit 2。`git -C` や絶対パス経由も対象にする |
+| `block-force-push` | `PreToolUse`（Bash / PowerShell） | force push | `--force` / `-f` / `--force-with-lease` / `+refspec` を解析して exit 2 |
+| `scope-file-guard` | `PreToolUse`（Edit / Write / NotebookEdit / **Bash / PowerShell**） | 対象外ファイルへの変更 | 変更先パスを承認の許可パターン・禁止パターンと照合。禁止パターンを優先。**加えて Bash のリダイレクト（`> file` / `>> file`）と `tee` の宛先、フォーマッタ等の一括書き換えも検査する**（これらは `Edit` の `ask` では止まらない。第 10 節 10-4） |
+| `secret-scan-precommit` | `PreToolUse`（Bash / PowerShell：commit / push） | 秘密情報の混入 | ステージ内容または差分を検査。**大文字小文字を区別しない**（過去にこの欠落で検出漏れが発生した）。社内固有名のリストも照合 |
+| `test-gate-precommit` | `PreToolUse`（Bash / PowerShell：commit） | テスト未実行・失敗のままの commit | 承認のテストコマンドが実行され成功した記録があるかを確認。なければ exit 2 |
+| `pr-target-guard` | `PreToolUse`（Bash / PowerShell：`gh pr create`） | 承認外の base / リポジトリへの PR | base と head、対象リポジトリを承認と照合。差分ファイルが許可範囲内かも確認 |
+| `stop-condition-guard` | `PreToolUse` / `PostToolUse` | STOP 条件の自己解除 | approval.md 7-5 の条件に触れる操作を検出。該当したら exit 2 し、エージェントが続行できないようにする |
+| `no-auto-merge` | `PreToolUse`（Bash / PowerShell） | PR の merge・auto-merge 有効化 | `gh pr merge`、`gh api` の merge 系、auto-merge 設定を検出して exit 2 |
+
+### 9.4 Windows 11 での考慮事項
+
+- **`Bash` と `PowerShell` は別ツールであり、Hook はどちらのイベントでも
+  発火させる必要がある。** 片方だけでは迂回される。
+- PowerShell はエイリアスが正規化されるため、Hook 側でも
+  `rm` / `del` / `ri` などを `Remove-Item` と同一視して解析する必要がある。
+- PowerShell は引数の位置が自由であり、`-Recurse` の位置を前提にできない。
+  文字列の前方一致ではなく、トークン単位の解析が必要になる。
+- **コマンドラッパー経由の迂回**を考慮する。
+  `bash -c` / `sh -c` / `cmd /c` / `powershell -Command` / 絶対パス実行
+  （`/usr/bin/git`、`C:\Program Files\Git\bin\git.exe`）/ `npx` / `docker exec` /
+  環境ランナー。Hook はコマンド文字列を再帰的に展開して解析する。
+- Hook の実装言語は Windows と POSIX の両方で動くものを選ぶ
+  （Node.js または Python。シェルスクリプトは避ける）。
+- パスは照合前に正規化する。Claude Code は POSIX 形式へ正規化するが、
+  Hook が受け取る値の形式を確認してから実装する。
+- 改行コードは `.gitattributes` で LF に統一済だが、Hook が標準入力から
+  受け取る JSON の改行も考慮する。
+
+### 9.5 Hook 自体の保護
+
+Hook がリポジトリ内のファイルである限り、エージェントが書き換えられる。
+これを防ぐ設計が必要である。
+
+- `.claude/hooks/**` と承認ファイルを `Edit` の `deny` に入れる
+  （現在 `.claude/**` は `ask`。Hook 導入時に `deny` へ変更するかを判断する）。
+- `.claude/settings.json` 自体の変更も `deny` にするかを判断する。
+  ただし `deny` にすると、人間が Claude Code 経由で設定を直せなくなる。
+- `--settings` や `CLAUDE_CONFIG_DIR` による設定の差し替え、
+  `--disable-all-hooks` 相当のフラグによる Hook 無効化を考慮する。
+  公式仕様で `disableAllHooks` はプロジェクト設定で上書きできるため、
+  完全な固定には管理設定（managed settings）が必要になる。
+- **最終的な強制力は GitHub Ruleset（サーバ側）にある。**
+  ローカルの Hook を無効化できたとしても、既定ブランチの保護は破れない。
+  Hook は「事故を手前で止める」層であり、最後の砦ではない。
+
+### 9.6 移行の前提条件
+
+次がすべて満たされるまで、Git 書き込み操作を `ask` から外さない。
+
+1. 9.3 の Hook のうち、少なくとも `scope-repo-guard`、`scope-branch-guard`、
+   `block-main-push`、`block-force-push`、`scope-file-guard`、
+   `secret-scan-precommit` が実装され、動作確認されている
+2. 承認範囲の機械可読な表現（9.2）が確定し、改ざんから保護されている
+3. Hook が Windows の `Bash` / `PowerShell` の両方で発火することを実機確認した
+4. Hook の迂回経路（9.4）を評価し、残存リスクを文書化した
+5. Hook が失敗・未起動のときに**安全側に倒れる**（操作を通さない）ことを確認した
+6. GitHub Ruleset の必要承認数が引き上げられている
+
+**1〜6 が未達の状態で `ask` を外すことは、保護の削除にあたる。**
+文書上の方針だけで「自動承認が実現した」と報告してはならない。
+
+---
+
+## 10. 標準機能の調査結果（Auto モード・Sandbox）
+
+独自 Hooks の必要範囲を見直すため、Claude Code の標準機能を調査した
+（READ ONLY。有効化は行っていない）。
+
+調査時点：Claude Code **2.1.296**（npm-global / win32-x64 / native Windows）
+
+### 10-1. Auto モード
+
+| 項目 | 結果 |
+| :- | :- |
+| 利用可否（プラン） | **全プランで利用可能** |
+| 利用可否（モデル） | Anthropic API では Opus 4.6+ / Sonnet 4.6+ / Haiku 5.5 / Fable。**本環境のモデルは条件を満たす** |
+| Windows 対応 | native Windows では **v2.1.233 以降**が必要。本環境は 2.1.296 のため**対応している** |
+| 有効化方法 | `claude --permission-mode auto`、または `~/.claude/settings.json` の `permissions.defaultMode` |
+| **プロジェクト設定から指定できるか** | **できない。** `.claude/settings.json` / `.claude/settings.local.json` の `"auto"` は効かず、組み込み既定に戻る |
+
+**仕組み**：分類器モデル（既定 Claude Sonnet 5）が、人間の代わりに
+各操作を事前審査する。判定順は
+(1) allow / ask / deny ルール → (2) 読み取りと作業ディレクトリ内の編集は自動承認
+（保護パスへの書き込みと作業ディレクトリ外の初回読み取りを除く）→
+(3) それ以外は分類器 → (4) 分類器が拒否した場合は理由が返る。
+分類器はツール結果を見ない（ファイルや Web の敵対的内容に操作されない設計）。
+3 回連続または累計 20 回の拒否で auto モードは一時停止する。
+
+**既定で拒否される操作の例**：`curl | bash` によるコード取得実行、
+外部エンドポイントへの機密データ送信、本番デプロイとマイグレーション、
+force push、`git reset --hard`、`terraform destroy`、
+未承認 PR の merge、認証情報の出力。
+
+**既定で許可される操作の例**：作業ディレクトリ内のファイル操作、
+ロックファイル・マニフェストに宣言された依存のインストール、
+読み取り専用 HTTP、**作業リポジトリのブランチへの push**
+（`production` や `gh-pages` のようなデプロイ対象を示す名前のブランチを除く）。
+
+**本基盤にとって決定的な点（3 つ）**
+
+1. **`ask` ルールは auto モードでもプロンプトを出す。**
+   公式ドキュメントは「`Bash(git push *)` のようにコマンド内容に対する
+   ask ルールはプロンプトにフォールバックする」と明記している。
+   → **auto モードを使っても、現在の `ask` を残したままでは
+     Git 書き込みは自動化されない。** Hooks と同じ結論である。
+2. **auto モードに入ると広い `allow` ルールは無効化される。**
+   `Bash(*)` / `PowerShell(*)`、`Bash(python*)` のようなインタプリタの
+   ワイルドカード、**パッケージマネージャの run コマンド**、`Agent` ルール、
+   `Monitor` ルールが対象。`Bash(npm test)` のような狭いルールは残る。
+   → STEP 1J で `allow` に入れた `npm run build*` 等は、
+     **製品側が auto モードで自動的に落とすカテゴリ**だった。
+     今回これらを共通配布から外した判断は、この挙動と一致する。
+3. **プロジェクト設定から有効化できない。**
+   → 共通ルールとして `settings.json` で配布することはできない。
+     各開発者の `~/.claude/settings.json` または起動時フラグで選ぶ運用になる。
+     **組織全体へ強制することも、逆に共通ファイルで固定することもできない。**
+
+**無効化**：`permissions.disableAutoMode` を `"disable"` にすると使えなくなる。
+本リポジトリでは設定していない（auto モードでも `deny` / `ask` は評価されるため、
+保護は維持される）。
+
+### 10-2. Sandbox
+
+| 項目 | 結果 |
+| :- | :- |
+| **native Windows での利用可否** | **利用できない。** 公式ドキュメントは「native Windows では Claude Code はコマンドをサンドボックスなしで実行する」と明記。使うには **WSL2 内で Claude Code を動かす**必要がある |
+| 対応 OS | macOS / Linux / WSL2 |
+| 既定 | 無効 |
+| 有効化 | `/sandbox`、または `sandbox.enabled` を `true` |
+| 依存（Linux / WSL2） | `bubblewrap` と `socat` |
+| 保護範囲 | **シェルコマンドのみ。** 書き込みは作業ディレクトリ・ユーザー一時ディレクトリ・追加ディレクトリに限定され、保護パスは書き込み拒否のまま |
+| サンドボックス外 | **Read / Edit / Write / WebFetch などの組み込みツール、Hooks、MCP サーバ、LSP、ステータスライン、`apiKeyHelper`** |
+| `autoAllowBashIfSandboxed` | 既定 `true`。サンドボックス内のコマンドは確認なしで実行される。Manual モードでもファイルを変更するコマンドが通る |
+| `ask` との関係 | 丸ごとの `Bash` ask は代替されるが、**`Bash(git push *)` のような内容指定の ask は依然としてプロンプトを出す** |
+
+**本環境（native Windows）では Sandbox を安全装置として使えない。**
+WSL2 へ移行すれば `autoAllowBashIfSandboxed` により
+「シェルコマンドの副作用を OS が封じ込めつつ無確認で実行する」構成が取れるが、
+それでも内容指定の `ask` は残り、組み込みファイルツールと Hooks は
+サンドボックス外である。
+
+### 10-3. 標準機能で代替できる独自 Hooks と、できないもの
+
+| 第 9 節の Hook | 標準機能で代替できるか |
+| :- | :- |
+| `block-force-push` | **auto モードが既定で拒否**（force push は拒否リストにある）。ただし auto モードは任意利用であり強制できない。`deny` ルールでの遮断を併用する（実装済） |
+| `no-auto-merge` | **auto モードが既定で拒否**（未承認 PR の merge）。同様に `deny` を併用（実装済） |
+| 本番デプロイ・マイグレーションの遮断 | **auto モードが既定で拒否。** `deny` ルールと併用（実装済） |
+| `secret-scan-precommit` | auto モードは外部エンドポイントへの機密送信を拒否するが、**commit 内容の秘密情報検査は行わない。独自 Hook が必要** |
+| `scope-repo-guard` / `scope-branch-guard` | auto モードは「作業リポジトリのブランチへの push」を既定で許可する。**どのリポジトリ・どのブランチが承認済みかは分類器が知らない。独自 Hook が必要** |
+| `scope-file-guard` | auto モードは作業ディレクトリ内の編集を既定で自動承認する。**承認範囲という概念を持たない。独自 Hook が必要** |
+| `test-gate-precommit` | **代替なし。独自 Hook が必要** |
+| `pr-target-guard` | **代替なし。独自 Hook が必要** |
+| `stop-condition-guard` | **代替なし。独自 Hook が必要** |
+| `block-main-push` | Sandbox は無関係。auto モードは「デプロイ対象を示す名前のブランチ」を除外するが、既定ブランチ全般の保護ではない。`deny` ルールと **GitHub Ruleset** で担保（実装済）。パターン非依存の遮断には独自 Hook が必要 |
+
+**結論**：標準機能は「一般的に危険な操作」を止めるが、
+**「このタスクで承認された範囲」という概念を持たない。**
+一括承認の強制に必要な Hook（repo / branch / file / test / pr-target /
+stop-condition / secret-scan）は、標準機能では代替できない。
+
+一方で、`block-force-push` / `no-auto-merge` / 本番デプロイ遮断は
+`deny` ルール（実装済）と auto モードの既定拒否で二重に守られるため、
+**独自 Hook の優先度を下げられる。**
+第 9 節 9.6 の必須 Hook は、この結果を踏まえると
+`scope-repo-guard` / `scope-branch-guard` / `scope-file-guard` /
+`secret-scan-precommit` の 4 つが最優先である。
+
+### 10-4. 編集経路の保護状況（検証結果）
+
+公式仕様で確認した結果を記録する。
+
+| 経路 | `ask` で止まるか | 備考 |
+| :- | :- | :- |
+| `Edit` / `Write` / `NotebookEdit` ツール | **止まる** | `Edit` ルールは「ファイルを編集する組み込みツール全般」に適用される |
+| `.claude/**` への書き込み（全経路） | **止まる** | `.claude` は製品側の**保護パス**。`default` / `acceptEdits` では確認が出る |
+| Bash のリダイレクト（`> file` / `>> file` / `2> file`） | **止まらない** | 検査対象は `Edit` の **`allow` と `deny`**、保護パス、作業ディレクトリ。**`ask` は検査されない** |
+| `tee` の宛先 | **止まらない** | 同上（v2.1.269 以降で検査される） |
+| スクリプトが内部で開くファイル | **止まらない** | permission ルールの適用外 |
+
+**残る穴**：`CLAUDE.md` / `README.md` / `.gitignore` / `.gitattributes` は
+`Edit` の `ask` で保護しているが、Bash のリダイレクト経路では止まらない。
+これらは製品側の保護パスにも含まれていない
+（保護ファイルの一覧には `.gitconfig` / `.gitmodules` / `.npmrc` などが
+含まれるが、`.gitignore` と `.gitattributes` は含まれない）。
+
+対応：
+- 当面は**ルール文書上の禁止**として扱う
+  （[../.claude/rules/safety.md](../.claude/rules/safety.md) 5-3）
+- 恒久対応は `scope-file-guard` がリダイレクトと `tee` の宛先を検査すること（9.3）
+- `deny` で塞ぐ案もあるが、`deny` にすると人間が Claude Code 経由で
+  これらのファイルを編集できなくなるため採用しない
+
+### 10-5. `defaultMode: acceptEdits` の評価と配布時の前提条件
+
+**ai-workbench での使用**：適切と判断した。
+このリポジトリはルール文書と設計書のみで構成され、アプリケーションコードを
+持たない。保護が必要なファイルは次の 2 系統で守られている。
+
+- `.claude/**` → 製品側の保護パス ＋ `Edit(.claude/**)` の `ask`
+- `CLAUDE.md` / `README.md` / `.gitignore` / `.gitattributes` / `.github/**`
+  → `Edit` の `ask`（リダイレクト経路の穴は 10-4 のとおり）
+
+`docs/**` は `ask` を設けていないため `acceptEdits` で無確認に編集される。
+設計書の更新は通常作業であり、許容する。
+
+**他アプリへ配布する場合の前提条件**（配布前に確認する）
+
+1. **対象アプリのワークスペースを信頼してよいか確認する。**
+   `allow` ルールは trust 承認後に有効になる。
+   trust ダイアログで付与される内容を人間が確認する。
+2. **そのアプリで保護すべきファイルを洗い出し、`Edit` の `ask` または
+   `deny` に追加する。**
+   本基盤の既定（`.claude/**`、`.github/**`、`CLAUDE.md` 等）は
+   アプリ固有の設定ファイル（スキーマ定義、インフラ定義、CI 設定、
+   本番環境の設定）を網羅していない。
+3. **`acceptEdits` が許容できる範囲かを判断する。**
+   作業ディレクトリ内のすべてのファイルが無確認で編集される。
+   機密性の高いファイルを含むリポジトリでは `default` に戻す。
+4. 各開発者は `.claude/settings.local.json` の `defaultMode` で上書きできる。
+   この手段を周知する。
+5. **5-2 のプロジェクト固有の許可を設定する前に、スクリプトの中身を検証する。**
+
+### 10-6. 未検証事項
+
+次は READ ONLY の調査にとどめており、**実機で確認していない。**
+
+- `defaultMode: acceptEdits` の実際の挙動（ファイル編集が無確認で進むか）
+- `allow` ルールが trust 承認後に実際に効くか。trust ダイアログの表示内容
+- `Edit` の `ask` が `Write` / `NotebookEdit` に実際に適用されるか
+- Bash のリダイレクトが `ask` を通過することの実機確認
+  （10-4 は公式ドキュメントの記述に基づく。実際に書き込みを試していない）
+- `.claude/**` が保護パスとして実際に確認を出すか
+- auto モードの実際の挙動（有効化していない）
+- Sandbox の挙動（本環境では利用不可）
+- permission ルール単位の起動時警告
