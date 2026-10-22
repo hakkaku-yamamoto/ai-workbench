@@ -36,7 +36,7 @@ Ruleset の**変更**は [safety.md](safety.md) 1-a によりエージェント�
 
 - `main` で直接作業しない。作業は必ず専用ブランチで行う。
 - ブランチは `main` の最新状態から作成する。
-- 命名は `<種別>/<内容>` 形式（例：`setup/step1-common-rules`、`feat/pulse-report-agent`、`fix/login-redirect`）。
+- 命名は `<種別>/<内容>` 形式（例：`setup/step1-common-rules`、`feat/report-agent`、`fix/login-redirect`）。
 - 1 ブランチ = 1 目的。無関係な変更を混ぜない。
 - **同名のブランチが既に存在する場合は、上書き・切り替え・強制作成をせず STOP して報告する。**
 
