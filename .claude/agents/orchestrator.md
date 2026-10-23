@@ -4,6 +4,9 @@ description: 開発依頼を受け取り、承認範囲を確定させてから�
 tools: Read, Grep, Glob, Bash, Agent
 disallowedTools: Edit, Write, NotebookEdit
 model: inherit
+skills:
+  - plan-implementation
+  - write-completion-report
 hooks:
   PreToolUse:
     - matcher: "Bash|PowerShell"

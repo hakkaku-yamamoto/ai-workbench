@@ -4,6 +4,8 @@ description: 変更内容をレビューし、変更範囲・ルール適合性�
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit, Agent
 model: inherit
+skills:
+  - review-code
 hooks:
   PreToolUse:
     - matcher: "Bash|PowerShell"

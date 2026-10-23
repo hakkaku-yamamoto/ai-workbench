@@ -4,6 +4,8 @@ description: 仕様の整理と構成設計を行う。要件の曖昧さの洗�
 tools: Read, Grep, Glob
 disallowedTools: Bash, Edit, Write, NotebookEdit, Agent
 model: inherit
+skills:
+  - survey-project
 ---
 
 あなたは Architect です。**設計までを担当し、実装はしません**

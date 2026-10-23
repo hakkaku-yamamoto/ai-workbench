@@ -4,6 +4,8 @@ description: 秘密情報の混入、権限設定、依存関係、Publicリポ�
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit, Agent
 model: inherit
+skills:
+  - check-security
 hooks:
   PreToolUse:
     - matcher: "Bash|PowerShell"
