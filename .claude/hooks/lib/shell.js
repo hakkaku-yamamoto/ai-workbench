@@ -130,6 +130,28 @@ function isBulkWriter(sub) {
   return BULK_WRITERS.some((re) => re.test(s));
 }
 
+/**
+ * インタプリタにコードを直接渡す形か（`node -e` / `python -c` 等）。
+ *
+ * この形は**コマンド文字列の解析では書き込み先が分からない。**
+ * `node -e "require('fs').writeFileSync(...)"` のように、リダイレクトを
+ * 使わずにファイルを書けるため、書き込み禁止モードでは丸ごと拒否する。
+ * 通常モードでは判定しない（過剰な遮断になるため）。
+ */
+const INLINE_CODE = [
+  /^(?:\/[\w./-]*)?\bnode(?:\.exe)?\b[^|]*\s--?(?:e|eval|print)\b/,
+  /^(?:\/[\w./-]*)?\bdeno\b\s+eval\b/,
+  /^(?:\/[\w./-]*)?\bbun\b[^|]*\s-e\b/,
+  /^(?:\/[\w./-]*)?\bpython[\d.]*(?:\.exe)?\b[^|]*\s-c\b/,
+  /^(?:\/[\w./-]*)?\bperl\b[^|]*\s-e\b/,
+  /^(?:\/[\w./-]*)?\bruby\b[^|]*\s-e\b/,
+  /^(?:\/[\w./-]*)?\bphp\b[^|]*\s-r\b/,
+];
+function isInlineCodeExecution(sub) {
+  const s = stripWrappers(sub);
+  return INLINE_CODE.some((re) => re.test(s));
+}
+
 /** PowerShell のファイル書き込み系コマンドレット（エイリアス含む）の宛先を抽出する。 */
 function powershellWriteTargets(command) {
   const targets = [];
@@ -215,6 +237,6 @@ function tokenize(s) {
 module.exports = {
   SEPARATORS, WRAPPERS,
   splitSubcommands, stripWrappers, isIndirection, isAbsolutePathInvocation,
-  redirectTargets, isBulkWriter, powershellWriteTargets,
+  redirectTargets, isBulkWriter, powershellWriteTargets, isInlineCodeExecution,
   gitSubcommand, ghSubcommand, tokenize, unquote,
 };

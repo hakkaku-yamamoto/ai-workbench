@@ -94,7 +94,8 @@ function runHook(hook, payload, opts = {}) {
   const env = Object.assign({}, process.env);
   if (opts.scope === null) delete env.AI_WORKBENCH_TASK_SCOPE;
   else env.AI_WORKBENCH_TASK_SCOPE = opts.scope || scopeOk;
-  const r = spawnSync(process.execPath, [path.join(HOOKS, hook)], {
+  const argv = [path.join(HOOKS, hook)].concat(opts.args || []);
+  const r = spawnSync(process.execPath, argv, {
     input: payload === undefined ? '' : (typeof payload === 'string' ? payload : JSON.stringify(payload)),
     encoding: 'utf8',
     env,
@@ -168,8 +169,10 @@ check('gh --repo が承認リポジトリなら許可',
 check('読み取り系 git は別リポジトリでも許可',
   runHook('scope-repo-guard.js', bashInput(repoOther, 'git status')), OK);
 
-check('承認範囲なし + 別リポジトリの commit は判定しない（既存ルールに委ねる）',
-  runHook('scope-repo-guard.js', bashInput(repoOther, 'git commit -m x'), { scope: scopeAbsent }), OK);
+// 設計変更：以前は「承認範囲なしの commit は判定しない」としていたが、
+// `ask` を将来外したときに無条件で通ってしまうため、拒否する方針へ変更した。
+check('承認範囲なし: commit は拒否（ask に依存せず fail closed）',
+  runHook('scope-repo-guard.js', bashInput(repoOther, 'git commit -m x'), { scope: scopeAbsent }), BLOCK);
 
 check('承認範囲が壊れていれば拒否',
   runHook('scope-repo-guard.js', bashInput(repoOk, 'git commit -m x'), { scope: scopeBroken }), BLOCK);
@@ -485,6 +488,127 @@ check('承認範囲なし: Edit で通常ファイルは判定しない',
 
 check('承認範囲あり: ベースライン保護も併せて効く（リポジトリ外）',
   runHook('scope-file-guard.js', bashInput(repoOk, 'echo x > ../outside.txt')), BLOCK);
+
+/* ------------------------------------------------------------------ */
+/* 5-c. --no-writes（Bash を持つ読み取り専用役割の書き込み遮断）        */
+/* ------------------------------------------------------------------ */
+section('5-d. 承認範囲なしでの Git 書き込み（fail closed）');
+
+/**
+ * 要件：将来 Git 書き込みの `ask` を外しても、
+ * 承認範囲が未設定の状態で commit・push・PR 作成が無条件に通らないこと。
+ * したがってこれらは `ask` に依存せず Hook 側で拒否する。
+ */
+const ABS = { scope: scopeAbsent };
+
+check('承認範囲なし: git commit を拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git commit -m x'), ABS), BLOCK);
+check('承認範囲なし: 作業ブランチへの push も拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git push origin feat/x'), ABS), BLOCK);
+check('承認範囲なし: git merge を拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git merge feat/x'), ABS), BLOCK);
+check('承認範囲なし: git rebase を拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git rebase main'), ABS), BLOCK);
+check('承認範囲なし: git tag の作成を拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag v1.0.0'), ABS), BLOCK);
+check('承認範囲なし: gh pr create を拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'gh pr create --title x --body y'), ABS), BLOCK);
+check('承認範囲なし: gh pr merge を拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'gh pr merge 1'), ABS), BLOCK);
+check('承認範囲なし: gh release create を拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'gh release create v1'), ABS), BLOCK);
+check('承認範囲なし: PowerShell 経由の commit も拒否',
+  runHook('scope-repo-guard.js', psInput(repoOk, 'git commit -m x'), ABS), BLOCK);
+check('承認範囲なし: bash -c でラップした commit も拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'bash -c "git commit -m x"'), ABS), BLOCK);
+
+// 承認範囲が無くても作業を止めてはいけないもの（過剰遮断の防止）
+check('承認範囲なし: git status は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git status'), ABS), OK);
+check('承認範囲なし: git diff は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git diff --cached'), ABS), OK);
+check('承認範囲なし: git add は通る（ask 側で扱う）',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git add -A'), ABS), OK);
+check('承認範囲なし: git fetch は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git fetch origin'), ABS), OK);
+check('承認範囲なし: gh pr view は通る（読み取り）',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'gh pr view 1'), ABS), OK);
+check('承認範囲なし: テスト実行は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'node tests/run-all.js'), ABS), OK);
+
+// 承認範囲があれば通ること（承認の意味が失われていないこと）
+check('承認範囲あり: 承認された commit は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git commit -m x')), OK);
+
+// ラッパー経由の承認必須操作は、承認範囲があっても解析できないため拒否
+check('承認範囲あり: bash -c でラップした push も拒否（解析できないため）',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'bash -c "git push origin feat/x"')), BLOCK);
+check('xargs 経由の commit も拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'echo x | xargs git commit -m'), ABS), BLOCK);
+check('npx 経由の gh pr create も拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'npx gh pr create'), ABS), BLOCK);
+
+// ラッパーを使っていても Git/gh と無関係なら過剰に遮断しないこと
+check('npx で Git と無関係なコマンドは通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'npx prettier --check src'), ABS), OK);
+check('bash -c で Git と無関係なコマンドは通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'bash -c "ls -la src"'), ABS), OK);
+check('文書内の文字列検索は遮断しない（ラッパーでないため）',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'grep -rn "git commit" docs'), ABS), OK);
+
+section('5-c. --no-writes（読み取り専用役割に Bash を与える場合）');
+
+/** 承認範囲の有無に関わらず効くこと。両方で検査する。 */
+const NW = { args: ['--no-writes'] };
+const NW_NOSCOPE = { args: ['--no-writes'], scope: scopeAbsent };
+
+// 通るべきもの（機能を失わせない）
+check('--no-writes: テストの実行は通る',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'node tests/run-all.js'), NW), OK);
+check('--no-writes: git diff は通る',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'git diff --stat'), NW), OK);
+check('--no-writes: grep は通る',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'grep -rn TODO src'), NW), OK);
+check('--no-writes: パイプだけの集計は通る',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'git log --oneline | head -20'), NW), OK);
+
+// 拒否すべきもの
+check('--no-writes: リダイレクトは範囲内のパスでも拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'echo x > src/app.ts'), NW), BLOCK);
+check('--no-writes: 追記リダイレクトも拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'echo x >> src/app.ts'), NW), BLOCK);
+check('--no-writes: tee も拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'echo x | tee src/app.ts'), NW), BLOCK);
+check('--no-writes: sed -i も拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'sed -i s/a/b/ src/app.ts'), NW), BLOCK);
+check('--no-writes: prettier --write も拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'prettier --write src/app.ts'), NW), BLOCK);
+check('--no-writes: node -e は書き込み先を解析できないため拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'node -e "require(\'fs\').writeFileSync(1,2)"'), NW), BLOCK);
+check('--no-writes: python -c も拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'python -c "open(1,2)"'), NW), BLOCK);
+check('--no-writes: perl -e も拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'perl -e print'), NW), BLOCK);
+check('--no-writes: bash -c でラップしても拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'bash -c "echo x > src/app.ts"'), NW), BLOCK);
+check('--no-writes: PowerShell の Set-Content も拒否',
+  runHook('scope-file-guard.js', psInput(repoOk, 'Set-Content -Path src/app.ts -Value x'), NW), BLOCK);
+check('--no-writes: Edit ツール自体も拒否',
+  runHook('scope-file-guard.js', editInput(repoOk, path.join(repoOk, 'src', 'app.ts')), NW), BLOCK);
+
+// 承認範囲が無くても効くこと
+check('--no-writes: 承認範囲なしでもリダイレクトを拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'echo x > src/app.ts'), NW_NOSCOPE), BLOCK);
+check('--no-writes: 承認範囲なしでも node -e を拒否',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'node -e 1'), NW_NOSCOPE), BLOCK);
+check('--no-writes: 承認範囲なしでもテスト実行は通る',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'node tests/run-all.js'), NW_NOSCOPE), OK);
+
+// 既定（引数なし）では過剰に遮断しないこと
+check('引数なし: 範囲内のリダイレクトは通る（--no-writes は既定ではない）',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'echo x > src/app.ts')), OK);
+check('引数なし: node -e は通る（過剰遮断を避ける）',
+  runHook('scope-file-guard.js', bashInput(repoOk, 'node -e 1')), OK);
 
 section('6. Windows 実行互換性');
 

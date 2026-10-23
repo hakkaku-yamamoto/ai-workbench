@@ -10,7 +10,16 @@
  *   書き込み操作 → 承認範囲の有無に関わらず拒否
  * - gh の --repo が承認リポジトリと異なる → 拒否
  * - 承認範囲がある場合、書き込み操作の origin が承認リポジトリと一致しなければ拒否
- * - 承認範囲がない場合は、上記の明示的な別リポジトリ指定のみを拒否する
+ * - **承認範囲がない場合、承認を要する Git 操作（commit / push / merge /
+ *   タグ作成 / gh の書き込み）は拒否する（fail closed）。**
+ *   これは `ask` を将来外しても「承認範囲が未設定なら無条件に通る」状態を
+ *   作らないための設計である。`ask` に依存しない。
+ *
+ * 運用上の帰結（重要）
+ *   エージェントが commit・push・PR 作成を行うには、人間が発行した
+ *   タスクスコープ承認ファイルが必要になる。
+ *   承認ファイルが無い場合は、人間自身が操作する。
+ *   Hook 側に環境変数等の迂回口は設けない（設けると穴になる）。
  */
 
 const { execFileSync } = require('child_process');
@@ -19,6 +28,40 @@ const S = require('./lib/scope');
 const SH = require('./lib/shell');
 
 const HOOK = 'scope-repo-guard';
+
+/**
+ * 承認がなければ実行させない git サブコマンド。
+ *
+ * GIT_WRITE より狭い。`add` / `fetch` / `stash` のような、
+ * 承認範囲が無くても作業の継続に必要なものは含めない
+ * （それらは permission の `ask` 側で扱う）。
+ */
+const GIT_NEEDS_APPROVAL = new Set([
+  'push', 'commit', 'merge', 'rebase', 'cherry-pick', 'revert',
+  'tag', 'am', 'update-ref', 'filter-branch', 'replace',
+]);
+
+/**
+ * ラッパー経由（`bash -c` / `npx` / `xargs` 等）に、承認を要する操作の
+ * 記述が含まれているか。
+ *
+ * これらのラッパーの中身は解析できない（`stripWrappers` は意図的に
+ * 展開しない）。そのため「解析できない経路に承認必須操作の記述がある」
+ * 場合は、確認できない以上 **拒否する**（fail closed）。
+ *
+ * 誤検出の向き：遮断側に倒れる。ラッパーを使わない通常のコマンドは
+ * この判定の対象にならないため、文書内の文字列検索などは影響を受けない。
+ * 取りこぼしは残る（ラッパーの中で変数展開や base64 を使えば検出できない）。
+ */
+const APPROVAL_OP_TEXT = [
+  /\bgit\b[\s\S]{0,40}?\b(?:push|commit|merge|rebase|cherry-pick|revert|tag|am|update-ref|filter-branch|replace)\b/,
+  /\bgh\b[\s\S]{0,40}?\b(?:pr|release|repo|api|secret|variable|ruleset)\b/,
+];
+function wrappedApprovalOp(command) {
+  const subs = SH.splitSubcommands(command);
+  if (!subs.some((s) => SH.isIndirection(s))) return false;
+  return APPROVAL_OP_TEXT.some((re) => re.test(command));
+}
 
 /** 書き込みを伴う git サブコマンド */
 const GIT_WRITE = new Set([
@@ -88,6 +131,15 @@ S.run(HOOK, () => {
   }
   const scope = loaded.state === S.SCOPE_OK ? loaded.scope : null;
 
+  // 解析できない経路（bash -c / npx / xargs 等）に承認必須操作の記述がある場合は、
+  // 承認範囲の有無に関わらず拒否する。中身を確認できないため。
+  if (wrappedApprovalOp(command)) {
+    S.block(HOOK,
+      'ラッパー経由（`bash -c` / `npx` / `xargs` 等）で承認が必要な Git / gh 操作が ' +
+      '指定されています。この経路は中身を解析できないため拒否します。' +
+      'コマンドを直接記述してください。');
+  }
+
   for (const sub of SH.splitSubcommands(command)) {
     const git = SH.gitSubcommand(sub);
     if (git) {
@@ -101,6 +153,14 @@ S.run(HOOK, () => {
             `git の ${moved.map((g) => g.flag).join(' / ')} で作業ツリー外を指定した書き込み操作（git ${git.name}）は許可されません。` +
             '対象リポジトリの作業ディレクトリ内で実行してください。');
         }
+      }
+      // 承認範囲が無い状態での承認必須操作は拒否する（fail closed）
+      if (!scope && GIT_NEEDS_APPROVAL.has(git.name)) {
+        S.block(HOOK,
+          `git ${git.name} は承認が必要な操作ですが、タスクスコープ承認が宣言されていません。` +
+          '人間が発行した承認範囲ファイルが無い状態では実行できません。' +
+          '承認範囲の 7 項目（対象リポジトリ・目的・変更を許可する範囲・変更禁止の対象・' +
+          '作業ブランチ・許可する Git 操作・完了条件）を人間に確認してください。');
       }
       if (isWrite && scope) {
         const origin = originRepo(cwd);
@@ -136,6 +196,13 @@ S.run(HOOK, () => {
           S.block(HOOK,
             `gh の --repo が ${norm} を指しています。許可されている対象は ${expected} です`);
         }
+      }
+      // 承認範囲が無い状態での gh 書き込みは拒否する（fail closed）
+      if (isWrite && !scope) {
+        S.block(HOOK,
+          `gh ${positional.slice(0, 2).join(' ')} は承認が必要な操作ですが、` +
+          'タスクスコープ承認が宣言されていません。' +
+          '人間が発行した承認範囲ファイルが無い状態では実行できません。');
       }
       if (isWrite && scope) {
         const origin = originRepo(cwd);

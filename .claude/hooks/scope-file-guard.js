@@ -15,12 +15,26 @@
  * - 承認範囲が宣言されていなければ判定しない（既存の deny / ask に委ねる）。
  * - 承認範囲がある場合、**解析できない書き込み経路は拒否する**（fail closed）。
  * - denyPaths は allowPaths より優先する。
+ *
+ * 引数 `--no-writes`
+ *   読み取り専用の役割に Bash を与えざるを得ない場合に使う。
+ *   承認範囲の有無に関わらず、シェル経由の書き込み経路を**すべて**拒否する。
+ *   `.claude/agents/<name>.md` の frontmatter の `hooks` から渡す
+ *   （サブエージェント単位の Hook は Claude Code の標準機能）。
+ *
+ *   **限界（重要）**：この検査はコマンド文字列の解析である。
+ *   スクリプトファイルが内部で開くファイルは検出できない。
+ *   `node -e` 等のインラインコードは丸ごと拒否して穴を狭めているが、
+ *   「Bash を持つ役割はファイルを書けない」と断定することはできない。
  */
 
 const S = require('./lib/scope');
 const SH = require('./lib/shell');
 
 const HOOK = 'scope-file-guard';
+
+/** `--no-writes`：シェル経由の書き込みを一切許可しない（読み取り専用の役割用） */
+const NO_WRITES = process.argv.slice(2).includes('--no-writes');
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 
@@ -71,6 +85,10 @@ S.run(HOOK, () => {
   // 「承認範囲が無いこと」を理由に危険な書き込みを無条件に通さない。
   // ------------------------------------------------------------------
   if (EDIT_TOOLS.has(tool)) {
+    if (NO_WRITES) {
+      S.block(HOOK,
+        `この役割は ${tool} を使えません。ファイルの変更は developer / documenter に引き継いでください`);
+    }
     for (const t of collectEditTargets(tool, ti)) {
       const rel = S.normalizeRel(cwd, t);
       if (S.isOutsideCwd(rel)) {
@@ -85,6 +103,29 @@ S.run(HOOK, () => {
     if (typeof cmd === 'string' && cmd.length > 0) {
       const base = new Set(SH.redirectTargets(cmd));
       if (tool === 'PowerShell') for (const t of SH.powershellWriteTargets(cmd)) base.add(t);
+
+      // --- 書き込み禁止モード（読み取り専用の役割に Bash を与える場合）---
+      if (NO_WRITES) {
+        for (const t of base) {
+          S.block(HOOK,
+            `この役割はファイルを書き込めません。書き込み先 ${S.normalizeRel(cwd, t) || t} への` +
+            'リダイレクト・tee を拒否します。変更が必要な場合は developer / documenter に引き継いでください');
+        }
+        for (const sub of SH.splitSubcommands(cmd)) {
+          if (SH.isBulkWriter(sub)) {
+            S.block(HOOK,
+              'この役割はファイルを書き込めません。一括書き換えコマンドを拒否します: ' +
+              SH.stripWrappers(sub).slice(0, 80));
+          }
+          if (SH.isInlineCodeExecution(sub)) {
+            S.block(HOOK,
+              'この役割はファイルを書き込めません。インタプリタへのインラインコード' +
+              '（`node -e` / `python -c` 等）は書き込み先を解析できないため拒否します: ' +
+              SH.stripWrappers(sub).slice(0, 80));
+          }
+        }
+      }
+
       for (const t of base) {
         const rel = S.normalizeRel(cwd, t);
         if (S.isOutsideCwd(rel)) {

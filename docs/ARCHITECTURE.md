@@ -69,9 +69,9 @@ ai-workbench/
 │       ├── secret-scan-precommit.js
 │       └── README.md
 ├── tests/
-│   ├── run-all.js               全テストの実行（合計 431 件）
-│   ├── hooks/run-tests.js       Hooks の単体・異常系（113 件。11-8）
-│   └── definitions/run-tests.js 定義・設定・公開可否の検証（318 件。11-9）
+│   ├── run-all.js               全テストの実行（合計 589 件）
+│   ├── hooks/run-tests.js       Hooks の単体・異常系（156 件。11-8）
+│   └── definitions/run-tests.js 定義・設定・公開可否の検証（433 件。11-9）
 └── docs/
     ├── ARCHITECTURE.md          本書
     ├── permission-policy.md     allow 方針・編集パスの保護・ask と自動化
@@ -236,6 +236,70 @@ Developer が実装の一部として画面を作ると、
 
 詳細は [../.claude/rules/agent-conduct.md](../.claude/rules/agent-conduct.md) を参照する。
 
+### 3.9 ツール権限の設計（最小権限）
+
+#### なぜ `Edit` / `Write` を外すだけでは足りないか
+
+**`Bash` があればファイルは書ける。** リダイレクト（`> file`）、`tee`、
+`sed -i`、`node -e` でのインラインコードなど経路は複数ある。
+したがって「`Edit` と `Write` を与えていないから読み取り専用」という
+説明は誤りである。この誤りは実際に本基盤の初版に存在した。
+
+#### 現在の権限表
+
+| 役割 | `tools` | `disallowedTools` | 専用 Hook | 実際の性質 |
+| :- | :- | :- | :- | :- |
+| `orchestrator` | Read, Grep, Glob, Bash, Agent | Edit, Write, NotebookEdit | `--no-writes` | 委譲と git 確認。書き込み経路を遮断 |
+| `architect` | Read, Grep, Glob | Bash, Edit, Write, NotebookEdit, Agent | — | **真に読み取り専用**（コマンド実行不可） |
+| `uiux-designer` | Read, Grep, Glob | Bash, Edit, Write, NotebookEdit, Agent | — | **真に読み取り専用**（コマンド実行不可） |
+| `documenter` | Read, Grep, Glob, Edit, Write | Bash, NotebookEdit, Agent | — | 文書の書き込みのみ。**コマンド実行不可** |
+| `developer` | Read, Grep, Glob, Edit, Write, Bash | NotebookEdit, Agent | — | 実装。承認範囲内の書き込み |
+| `tester` | Read, Grep, Glob, Bash | Edit, Write, NotebookEdit, Agent | `--no-writes` | 実行はできるが書き込み経路を遮断 |
+| `reviewer` | Read, Grep, Glob, Bash | Edit, Write, NotebookEdit, Agent | `--no-writes` | 同上（`git diff` が必要） |
+| `security` | Read, Grep, Glob, Bash | Edit, Write, NotebookEdit, Agent | `--no-writes` | 同上（依存監査が必要） |
+
+`Bash` を残した 5 役割には、それぞれ機能上の理由がある。
+`orchestrator` は対象リポジトリとブランチの確認、`developer` と `tester` は
+テストの実行、`reviewer` は `git diff`、`security` は依存関係の監査である。
+**承認回数や利便性のために残しているのではない。**
+
+#### 実行権限と書き込み権限の分離
+
+`Bash` を持つ読み取り専用役割には、**サブエージェント単位の `PreToolUse`
+Hook**（Claude Code の標準機能）で `scope-file-guard --no-writes` を登録した。
+これにより、コマンドの実行（テスト・`git diff`・`grep`）は通し、
+書き込み経路（リダイレクト・`tee`・`sed -i` 等の一括書き換え・
+`node -e` 等のインラインコード）は exit 2 で遮断する。
+
+**この分離の限界（正確に記載する）**
+
+- スクリプトファイルが内部で開くファイルは、コマンド文字列の解析では
+  検出できない。`node script.js` が中でファイルを書けば通る。
+  **「Bash を持つ役割はファイルを書けない」とは言えない。**
+- frontmatter の Hook は**フォルダを信頼した後にのみ動作する。**
+- `permissionMode` をサブエージェント側で指定する方法は使えない。
+  公式仕様では、メインの会話が `acceptEdits` / `auto` /
+  `bypassPermissions` のときサブエージェントの `permissionMode` は
+  上書きされる。本基盤の `defaultMode` は `acceptEdits` であるため、
+  **この手段は機能しない。**
+
+#### 権限拡大（連鎖起動）の防止
+
+`Agent` ツールを持つサブエージェントは、さらに別のサブエージェントを
+起動できる（公式仕様では主会話から 3 層まで）。
+自分より強い権限の役割を起動できてしまうため、
+**`Agent` は `orchestrator` だけに与え、他の 7 役割では
+`disallowedTools` でも明示的に拒否している。**
+
+委譲は権限の委譲ではない。各役割の権限はその定義の `tools` と
+`disallowedTools` で決まり、呼び出し元の権限は引き継がれない。
+
+#### `disallowedTools` を併記する理由
+
+`tools` を省略したサブエージェントは**利用可能な全ツールを継承する**
+（公式仕様）。将来 `tools` の記述を落とした場合に権限が一気に開くため、
+拒否側も明示している。両者が矛盾していないことはテストで照合する。
+
 ---
 
 ## 4. エージェントとスキルの違い
@@ -249,6 +313,34 @@ Developer が実装の一部として画面を作ると、
 | 使いどころ | 並列化したい作業、親の文脈を汚したくない大量の読み取り、独立した判断が必要な役割 | 繰り返す定型作業、組織固有の手順、特定分野の判断基準 |
 | 使い分けの目安 | 「**誰が**やるか」を分けたいとき | 「**どうやって**やるか」を揃えたいとき |
 | 定義場所 | `.claude/agents/` | `.claude/skills/` |
+
+### 4.0 スキルの `allowed-tools` は使わない（重要）
+
+公式仕様を確認した結果、**`allowed-tools` は列挙したツールの使用を
+「許可する」フィールドであり、制限するものではない。**
+
+> 「It does not restrict which tools are available.」
+> （`allowed-tools` は、スキルを起動したターンの間、列挙したツールの
+> 使用許可を与える）
+
+制限したい場合のフィールドは `disallowed-tools` である。
+
+本基盤の初版では 7 スキルすべてに `allowed-tools` を書いていた。
+制限の意図で書いたものだが、実際には**スキルを呼ぶだけで権限が
+付与される**状態であり、「共通配布では何も無条件許可しない
+（`allow` は空）」という方針と矛盾していた。
+
+対応：**7 スキルすべてから `allowed-tools` を削除した。**
+各スキルが使うツールは本文に記述し、権限はスキル側から与えない。
+
+`disallowed-tools` は使っていない。スキル起動後にツールが
+セッションのどの範囲で外れるかを実機で確認できていないため、
+確認できない制限を入れて作業を止めるリスクを避けた。
+これは**未検証を理由とした保留**であり、方針の否定ではない。
+
+なお公式仕様ではフィールド名はハイフン付きで、
+camelCase（`allowedTools` 等）は**エラーにならず無視される。**
+無視されれば意図した設定は効かないため、テストで誤記を検出している。
 
 ### 4.1 組み合わせ方
 
@@ -1117,6 +1209,44 @@ Hook も permission ルールも適用されていないことが判明した。
 セッション開始後にディレクトリがリポジトリへ移っても、このセッションには
 プロジェクト設定が適用されていない。
 
+#### 11-5-a. 公式仕様の確認結果
+
+公式ドキュメント（Settings files and precedence）で確認した事実：
+
+- 「Claude Code reads the shared `.claude/settings.json` from the session's
+  primary working directory, so to use a file committed at the repository root,
+  **start Claude Code there**.」
+- `/cd` でセッションを移動した場合は移動先から読み直す。
+  ただし**これには Claude Code v2.1.246 以降が必要**である。
+- 設定ファイルはファイル監視で再読み込みされ、`permissions` と `hooks` の
+  編集は再起動なしに反映される。
+- `permissions.allow` と `additionalDirectories` は**フォルダの信頼が前提**。
+  `deny` と `ask` は即時に適用される。
+- `permissions.defaultMode` の `auto` と `bypassPermissions` は
+  **プロジェクト設定からは効かない**（ユーザー設定か managed 設定のみ）。
+
+#### 11-5-b. 実機での再確認（本工程）
+
+本工程で、無害な探査により改めて確認した。
+
+| 探査 | 期待（設定が適用されていれば） | 実際 | 結論 |
+| :- | :- | :- | :- |
+| `sudo --version`（`Bash(sudo *)` は `deny`） | 遮断される | 実行された（`sudo 1.0.1`） | `deny` が適用されていない |
+| 作業ツリー外へのリダイレクト（`scope-file-guard` のベースライン保護対象） | exit 2 で遮断、ファイルは作られない | ファイルが作られた | Hook が発火していない |
+
+いずれも副作用が無害になるよう選んだ（`sudo` は引数が `--version` のみ、
+リダイレクト先は OS の一時ディレクトリ）。**破壊的操作・実際の `main`・
+本番環境・共有環境は使用していない。**
+
+実行中の Claude Code は **2.1.296** であり、v2.1.246 の条件は満たす。
+それでもプロジェクト設定が適用されていないことから、
+**デスクトップアプリが報告する作業ディレクトリの変更は `/cd` と同等ではない**、
+または当該セッションの設定は開始時に確定していると判断できる。
+
+したがって **Hooks を効かせるには、プロジェクトルートを起点として
+セッションを開始する必要がある。** 既存セッションの作業ディレクトリを
+移すことでは代替できない。
+
 したがって次が未確認のまま残る。
 
 - 実セッションで Hook が発火すること
@@ -1143,6 +1273,41 @@ Hook も permission ルールも適用されていないことが判明した。
 **Hooks は事故を手前で止める層であり、最後の砦ではない。**
 既定ブランチの保護の最終的な強制力は GitHub Ruleset（サーバ側）にある。
 
+### 11-6-a. 承認範囲が無い状態での Git 書き込み（fail closed）
+
+**要件**：将来 Git 書き込みの `ask` を外しても、承認範囲が未設定の状態で
+commit・push・PR 作成が無条件に許可されない設計にする。
+
+初版にはこの穴があった。承認範囲ファイルが無い場合、
+`scope-repo-guard` は `git commit` / 作業ブランチへの `git push` /
+`gh pr create` をいずれも通していた。`main` への push と force push だけが
+ベースラインで遮断されていた。`ask` があるうちは人間が気づくが、
+`ask` を外した時点で無条件許可になる。
+
+対応：**承認を要する操作は、承認範囲が無ければ拒否する。**
+
+| 操作 | 承認範囲なし | 承認範囲あり |
+| :- | :- | :- |
+| `git commit` / `push` / `merge` / `rebase` / `cherry-pick` / `revert` / `tag` / `am` / `update-ref` / `filter-branch` / `replace` | **拒否** | 対象リポジトリとブランチを照合 |
+| `gh pr create` / `pr merge` / `release create` / `repo create` / `api` の書き込み等 | **拒否** | 対象リポジトリを照合 |
+| `git status` / `diff` / `log` / `fetch` / `add`、`gh pr view` | 通す | 通す |
+
+`git add` と `git fetch` は拒否しない。承認範囲が無くても作業の継続に
+必要であり、これらは permission の `ask` 側で扱う。
+
+**ラッパー経由の遮断**：`bash -c "git commit ..."` のように解析できない
+経路に承認必須操作の記述がある場合は、承認範囲の有無に関わらず拒否する。
+中身を確認できないためである。テストでこの経路を実際に塞いだことを確認した
+（この穴はテストを書いたことで発見した）。
+
+**限界**：ラッパーの中で変数展開や base64 を使えば検出できない。
+文字列解析である以上、網羅ではない。
+
+**運用上の帰結**：エージェントが commit・push・PR 作成を行うには、
+人間が発行したタスクスコープ承認ファイルが必要になる。
+Hook 側に環境変数等の迂回口は設けていない（設ければ穴になる）。
+承認ファイルが無い場合は人間自身が操作する。
+
 ### 11-7. 一括承認に対応できる範囲（現状）
 
 - Hook のロジックとしては、承認範囲の照合・リポジトリ・ブランチ・ファイル範囲・
@@ -1155,7 +1320,7 @@ Hook も permission ルールも適用されていないことが判明した。
 
 `tests/hooks/run-tests.js`。`node tests/hooks/run-tests.js` で実行する。
 `node tests/run-all.js` で定義テスト（11-9）と併せて実行できる。
-**113 件すべて通過**（最終実行時）。
+**156 件すべて通過**（最終実行時）。
 
 | 区分 | 件数 | 内容 |
 | :- | -: | :- |
@@ -1164,6 +1329,8 @@ Hook も permission ルールも適用されていないことが判明した。
 | scope-file-guard | 27 | 範囲内 Edit の許可 / 範囲外の拒否 / `denyPaths` 優先 / Write・NotebookEdit / 作業ディレクトリ外 / パス欠落 / 承認範囲なしは判定しない / リダイレクト（`>` `>>`）/ `tee` / `/dev/null` の許可 / `sed -i` / ワイルドカード / `prettier --write` / `bash -c` `sh -c` / 絶対パス実行 / `npx` / PowerShell の `Set-Content` `Out-File` `Add-Content` |
 | secret-scan-precommit | 12 | commit 以外は判定しない / 差分が空 / クリーンな差分の許可 / GitHub トークン・AWS キー・代入形式・接続文字列・秘密鍵ブロック・禁止固有名の拒否 / `git commit -a` の作業ツリー検査 / **値そのものを stderr に出さないこと** / git が使えない場所での拒否 |
 | 異常系（4 Hook × 6） | 24 | 空入力 / 不正 JSON / 配列 / `tool_name` 欠落 / `tool_input` 欠落 / `null` → すべて exit 2 |
+| 承認範囲なしでの Git 書き込み（fail closed） | 23 | commit / push / merge / rebase / tag / `gh pr create` / `pr merge` / `release create` の拒否 / PowerShell 経由 / ラッパー経由（`bash -c` / `xargs` / `npx`）の拒否 / 一方で `status` `diff` `add` `fetch` `pr view` とテスト実行は通すこと / 承認範囲があれば通ること |
+| `--no-writes`（読み取り専用役割の書き込み遮断） | 20 | テスト実行・`git diff`・`grep`・パイプ集計は通すこと / リダイレクト・追記・`tee`・`sed -i`・`prettier --write`・`node -e`・`python -c`・`perl -e`・`bash -c` ラップ・PowerShell の `Set-Content`・`Edit` ツールの拒否 / 承認範囲の有無に関わらず効くこと / 既定（引数なし）では過剰に遮断しないこと |
 | ベースライン保護（承認範囲ファイルなし） | 14 | 承認範囲がない状態でも `.claude/hooks/**`・`.claude/settings.json`・`.claude/rules/**`・`CLAUDE.md`・`.git/**`・`.gitattributes`・`.gitignore` へのシェル経由の書き込み（リダイレクト / `tee` / `sed -i` / PowerShell）を拒否すること / 作業ツリー外への書き込みの拒否 / 通常ファイルの `Edit` は判定しないこと |
 | Windows 互換性 | 4 | `node` での起動 / Windows 絶対パス / バックスラッシュ区切りの正規化 / **exit 1 にならないこと** |
 
@@ -1196,17 +1363,18 @@ Hook も permission ルールも適用されていないことが判明した。
 
 `tests/definitions/run-tests.js`。エージェント・スキル・permission 設定・
 ルール文書・公開可否・Windows 互換性を検証する。
-**318 件すべて通過**（最終実行時）。
+**433 件すべて通過**（最終実行時）。
 
 | 区分 | 件数 | 内容 |
 | :- | -: | :- |
 | エージェント定義 | 65 | 7 件存在すること / frontmatter が解析できること / `name` と `description` の存在 / `name` がファイル名と一致 / 重複なし / 本文の分量 |
-| 役割制限（`tools`） | 24 | `architect` / `reviewer` / `tester` / `security` / `uiux-designer` / `orchestrator` が `Edit` `Write` `NotebookEdit` を**持たない**こと / `developer` が持つこと / 編集ツールを持つのが `developer` だけであること / `orchestrator` が `Agent` を持つこと |
+| 役割制限（`tools` / `disallowedTools` / 専用 Hook） | 75 | `architect` / `reviewer` / `tester` / `security` / `uiux-designer` / `orchestrator` が `Edit` `Write` `NotebookEdit` を**持たない**こと / `developer` が持つこと / 編集ツールを持つのが `developer` だけであること / `orchestrator` が `Agent` を持つこと |
 | 本文の必須記述 | 19 | 各エージェントに「承認範囲を広げない」旨があること / `tester` のテスト書き換え禁止・未実施を PASS としない旨 / `security` の値そのものを出さない旨 / `uiux-designer` の原則 3 案・根拠のないブランド要素の禁止 |
-| Orchestrator の振分け | 26 | 割当表の役割すべてに定義が存在すること / **全専門エージェントが割当表から到達できること**（到達不能な定義を作らない） / 事前手順 4 つの存在と順序 / 承認 7 項目・第 6 項・STOP 条件の参照 / 完了報告の参照 |
-| スキル定義 | 65 | 7 件存在すること / `SKILL.md` の存在 / frontmatter / `name` がディレクトリ名と一致 / 重複なし / 500 行未満 / 予約名でないこと / 組み込みの `code-review` と衝突しないこと |
+| Orchestrator の振分け | 26 |
+| 開発フローの網羅 | 14 | 依頼受付から完了報告までの各工程に受け手が定義されていること / テスト失敗時に developer へ戻す経路 / 範囲内で直せない場合の STOP 経路。**静的検査であり LLM の委譲動作は含まない** | 割当表の役割すべてに定義が存在すること / **全専門エージェントが割当表から到達できること**（到達不能な定義を作らない） / 事前手順 4 つの存在と順序 / 承認 7 項目・第 6 項・STOP 条件の参照 / 完了報告の参照 |
+| スキル定義 | 109 | 7 件存在すること / `SKILL.md` の存在 / frontmatter / `name` がディレクトリ名と一致 / 重複なし / 500 行未満 / 予約名でないこと / 組み込みの `code-review` と衝突しないこと |
 | `settings.json` | 49 | JSON として妥当 / `allow` が空 / `deny` と `ask` の件数 / `bypassPermissions` を使っていないこと / 必須 `deny` 12 件と必須 `ask` 7 件の存在 / `allow` に Git 書き込みが無いこと / ルール形式と重複 / Hooks 4 件の登録・`node` + `args` 形式・`onFailure: block`・`timeout`・スクリプトの実在・matcher |
-| 重要ルールの残存 | 16 |
+| 重要ルールの残存 | 22 |
 | 文書と実態の一致 | 32 | `CLAUDE.md` と本書のエージェント・スキル件数が実ファイル数と一致すること / 構成図に全定義ファイルが載っていること / 役割の名簿に実体のない役割が無いこと / Hooks や `agents/` を「未実装」「未作成」と書いたままにしていないこと / **実機での発火が未確認であることが明記されていること**（過大報告の防止） | 1-a / 1-b / force push 禁止 / PR merge は人間 / auto-merge 禁止 / タスクスコープ承認と 7 項目 / STOP 条件と自己解除の禁止 / 未実施を PASS としない / UI/UX とガード限界の要点 / 判定基準 |
 | 常時読み込み容量 | 2 | 合計が 75,000 bytes 未満であること / `rules/` に frontmatter が無いこと（あると常時読み込みにならない） |
 | 公開可否 | 1 | 追跡対象の `.md` / `.json` / `.js` 全件に、認証情報・代入形式の秘密情報・接続文字列・メールアドレス・IPv4・個人のファイルパス・禁止固有名が無いこと |
@@ -1244,7 +1412,7 @@ Hook も permission ルールも適用されていないことが判明した。
 node tests/run-all.js
 ```
 
-`tests/hooks/run-tests.js`（113 件）と `tests/definitions/run-tests.js`（318 件）を
-順に実行する。**合計 431 件。**
+`tests/hooks/run-tests.js`（156 件）と `tests/definitions/run-tests.js`（433 件）を
+順に実行する。**合計 589 件。**
 
 いずれも外部への送信を行わない。実際の `main` / 本番環境 / 共有環境は使用しない。

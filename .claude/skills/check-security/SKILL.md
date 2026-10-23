@@ -1,7 +1,6 @@
 ---
 name: check-security
 description: 秘密情報の混入、権限設定、依存関係、Publicリポジトリ適合性を検査する。commitやpushの前、または変更をレビューするときに使う。検出した値そのものは出力しない。
-allowed-tools: Read, Grep, Glob, Bash
 ---
 
 安全性を検査します。**検出した秘密情報の値そのものは出力しません。**
@@ -82,3 +81,13 @@ git check-ignore -q <path> && echo IGNORED || echo "NOT ignored"
 - **誤って秘密情報を記録した痕跡を見つけた場合に、自分で履歴を書き換える**
   （STOP して報告する。Public では鍵のローテーションが必要な事故であり、
     履歴の消去だけでは解決しない）
+
+## このスキルが使うツール
+
+読み取りと検査のみ。設定・権限・履歴は変更しない。
+
+**frontmatter に `allowed-tools` は書かない。**
+公式仕様では `allowed-tools` は列挙したツールの**使用を許可する**フィールドであり、
+制限するものではない（制限は `disallowed-tools`）。
+本リポジトリは「共通配布では何も無条件許可しない（`allow` は空）」方針のため、
+スキル側から権限を付与しない。

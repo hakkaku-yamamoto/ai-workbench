@@ -92,6 +92,31 @@ section('2. エージェントの役割制限（tools）');
 const NO_EDIT = ['orchestrator', 'architect', 'reviewer', 'tester', 'security', 'uiux-designer'];
 /** 編集ツールを持つべき役割（成果物がファイルそのものである役割だけ） */
 const NEEDS_EDIT = ['developer', 'documenter'];
+/**
+ * Bash を持ってはいけない役割。
+ * Bash があるとリダイレクトや sed -i でファイルを書けるため、
+ * Edit / Write が無いことだけでは読み取り専用を保証できない。
+ */
+const NO_BASH = ['architect', 'uiux-designer', 'documenter'];
+/** Bash が機能上必要な役割（理由つき） */
+const NEEDS_BASH = {
+  orchestrator: '対象リポジトリ・ブランチ・作業ツリーの確認に git が必要',
+  developer: 'テスト・Lint・型チェックの実行に必要',
+  tester: 'テストの実行そのものが責務',
+  reviewer: '変更のレビューに git diff が必要',
+  security: '依存関係の監査に必要',
+};
+/** Bash を持つが書き込みは禁止する役割（専用 Hook で遮断する） */
+const BASH_NO_WRITES = ['orchestrator', 'reviewer', 'tester', 'security'];
+
+function toolList(name) {
+  const fm = parseFrontmatter(fs.readFileSync(path.join(AGENT_DIR, `${name}.md`), 'utf8'));
+  return ((fm.data && fm.data.tools) || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+function disallowedList(name) {
+  const fm = parseFrontmatter(fs.readFileSync(path.join(AGENT_DIR, `${name}.md`), 'utf8'));
+  return ((fm.data && fm.data.disallowedTools) || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
 
 for (const n of NO_EDIT) {
   const p = path.join(AGENT_DIR, `${n}.md`);
@@ -114,6 +139,59 @@ check('orchestrator: Agent ツールを持つ（委譲のため）', (() => {
   const fm = parseFrontmatter(fs.readFileSync(path.join(AGENT_DIR, 'orchestrator.md'), 'utf8'));
   return ((fm.data && fm.data.tools) || '').split(',').map((s) => s.trim()).includes('Agent');
 })());
+
+// --- Bash 権限（Edit/Write が無いだけでは読み取り専用にならない）---
+for (const n of NO_BASH) {
+  check(`${n}: Bash を持たない（真に読み取り/文書のみ）`, !toolList(n).includes('Bash'),
+    `tools=${toolList(n).join(', ')}`);
+  check(`${n}: disallowedTools で Bash を明示的に拒否`, disallowedList(n).includes('Bash'));
+}
+for (const [n, why] of Object.entries(NEEDS_BASH)) {
+  check(`${n}: Bash を持つ（${why}）`, toolList(n).includes('Bash'));
+}
+check('Bash を持つ役割は 5 件だけ', (() => {
+  const owners = agentFiles.map((f) => path.basename(f, '.md')).filter((n) => toolList(n).includes('Bash'));
+  return owners.length === Object.keys(NEEDS_BASH).length
+    && Object.keys(NEEDS_BASH).every((n) => owners.includes(n));
+})());
+
+// --- 権限拡大（サブエージェントの連鎖起動）---
+check('Agent ツールを持つのは orchestrator だけ', (() => {
+  const owners = agentFiles.map((f) => path.basename(f, '.md'))
+    .filter((n) => toolList(n).includes('Agent') || toolList(n).includes('Task'));
+  return owners.length === 1 && owners[0] === 'orchestrator';
+})(), '専門エージェントが Agent を持つと、自分より強い権限のエージェントを起動できる');
+for (const n of EXPECTED_AGENTS) {
+  if (n === 'orchestrator') continue;
+  check(`${n}: disallowedTools で Agent を明示的に拒否`, disallowedList(n).includes('Agent'));
+}
+check('全エージェントが disallowedTools を持つ（tools の指定漏れ時の保険）',
+  EXPECTED_AGENTS.every((n) => disallowedList(n).length > 0));
+check('tools と disallowedTools が矛盾しない', EXPECTED_AGENTS.every((n) => {
+  const t = toolList(n), d = disallowedList(n);
+  return !t.some((x) => d.includes(x));
+}));
+
+// --- Bash を持つ読み取り専用役割の書き込み遮断 Hook ---
+for (const n of BASH_NO_WRITES) {
+  const text = fs.readFileSync(path.join(AGENT_DIR, `${n}.md`), 'utf8');
+  check(`${n}: frontmatter に PreToolUse Hook がある`, /^hooks:/m.test(text) && text.includes('PreToolUse'));
+  check(`${n}: Hook が scope-file-guard --no-writes を呼ぶ`,
+    text.includes('scope-file-guard.js') && text.includes('--no-writes'));
+  check(`${n}: Hook の matcher が Bash と PowerShell を含む`, /matcher:\s*"Bash\|PowerShell"/.test(text));
+  check(`${n}: Hook に onFailure: block がある`, /onFailure:\s*block/.test(text));
+  check(`${n}: Hook が \${CLAUDE_PROJECT_DIR} を使う`, text.includes('${CLAUDE_PROJECT_DIR}/.claude/hooks/'));
+}
+check('developer には書き込み遮断 Hook を付けていない（書き込みが責務のため）',
+  !fs.readFileSync(path.join(AGENT_DIR, 'developer.md'), 'utf8').includes('--no-writes'));
+
+// --- 制限できないことを「制限済み」と書いていないこと ---
+for (const n of BASH_NO_WRITES) {
+  const text = fs.readFileSync(path.join(AGENT_DIR, `${n}.md`), 'utf8');
+  check(`${n}: Bash の残存リスクを明記している`,
+    text.includes('制限されていないこと') && text.includes('コマンド文字列の解析では'));
+  check(`${n}: frontmatter Hook が信頼を前提とすることを明記`, text.includes('信頼した後にのみ'));
+}
 
 check(`編集ツールを持つのは ${NEEDS_EDIT.join(' / ')} だけ`, (() => {
   const owners = [];
@@ -214,6 +292,40 @@ check('失敗時の修正と再テストを人間確認なしで回す旨', orch
 check('完了報告が reporting.md 第 4 節に従う', orch.includes('reporting.md') && orch.includes('第 4 節'));
 check('Edit / Write を持っていないことが本文にも書かれている', orch.includes('`Edit` / `Write` は持っていない'));
 
+section('3c. 開発フローの網羅（静的検査。LLM の委譲動作は含まない）');
+
+/**
+ * 依頼受付 → 内容分析 → 計画 → 割当 → 実装 → テスト → レビュー →
+ * セキュリティ確認 → 再修正 → 完了報告
+ *
+ * **これは定義ファイルに各工程の受け手が存在することの確認である。**
+ * 実際に LLM がこの順で委譲するかは、この検査では確認できない。
+ */
+// skillNames はこの時点では未構築（第 4 節で作る）。ここは実ファイルで確認する。
+const hasSkill = (n) => fs.existsSync(path.join(ROOT, '.claude', 'skills', n, 'SKILL.md'));
+
+const FLOW = [
+  { stage: '依頼受付・内容分析', where: () => orch.includes('依頼内容の分析') },
+  { stage: '対象プロジェクトの確認', where: () => orch.includes('対象プロジェクトの確認') },
+  { stage: '承認範囲の確認', where: () => orch.includes('承認範囲の確認') },
+  { stage: '計画・タスク分解', where: () => orch.includes('開発タスクへの分解') && hasSkill('plan-implementation') },
+  { stage: '専門エージェントへの割当', where: () => orch.includes('専門エージェントへの割当') },
+  { stage: '実装', where: () => agentNames.has('developer') },
+  { stage: 'テスト', where: () => agentNames.has('tester') && orch.includes('`tester`') },
+  { stage: 'レビュー', where: () => agentNames.has('reviewer') && orch.includes('`reviewer`') },
+  { stage: 'セキュリティ確認', where: () => agentNames.has('security') && orch.includes('`security`') },
+  { stage: '再修正と再テスト', where: () => orch.includes('再テストする') && hasSkill('fix-with-tests') },
+  { stage: '完了報告', where: () => orch.includes('完了報告') && hasSkill('write-completion-report') },
+];
+for (const f of FLOW) {
+  check(`工程「${f.stage}」の受け手が定義されている`, f.where());
+}
+check('テスト失敗時に developer へ戻す経路がある',
+  orch.includes('`developer`') && orch.includes('修正させ'));
+check('範囲内で直せない場合に STOP する経路がある', orch.includes('範囲内では直せない'));
+check('完了報告に一括承認の追加項目を含める指示がある',
+  orch.includes('タスクスコープ承認を受けた作業の追加項目'));
+
 /* ------------------------------------------------------------------ */
 section('4. スキル定義');
 
@@ -244,10 +356,51 @@ for (const d of skillDirs) {
   check(`${d}: 500 行未満（${lines} 行）`, lines < 500);
   check(`${d}: 予約名でない`, !['synced', 'anthropic-skills'].includes(d) && !d.startsWith('anthropic-skills:'));
   check(`${d}: name に禁止文字がない`, !/[<>:]/.test(fm.data.name || ''));
+  // allowed-tools は「許可を与える」フィールドであり制限ではない。
+  // allow を空に保つ方針と矛盾するため使用しない（公式仕様を確認済み）。
+  check(`${d}: allowed-tools を使っていない（権限を付与しないため）`,
+    !/^allowed-tools:/m.test(text));
+  check(`${d}: 使用するツールを本文に明記している`, text.includes('## このスキルが使うツール'));
+  check(`${d}: allowed-tools を使わない理由を明記している`, text.includes('制限するものではない'));
+  // 公式仕様のフィールド名はハイフン付き。camelCase は無視される
+  check(`${d}: camelCase の誤ったフィールド名を使っていない`,
+    !/^(allowedTools|disallowedTools|whenToUse):/m.test(text));
 }
 for (const n of EXPECTED_SKILLS) check(`スキル ${n} が存在する`, skillNames.has(n));
 
 check('スキル名が組み込みの code-review と衝突しない', !skillNames.has('code-review'));
+
+// 到達可能性：どこからも参照されていないスキルは使われない
+const REFERRERS = [].concat(
+  agentFiles.map((f) => `.claude/agents/${f}`),
+  fs.readdirSync(path.join(ROOT, '.claude', 'rules')).map((f) => `.claude/rules/${f}`),
+  ['CLAUDE.md', 'docs/ARCHITECTURE.md'],
+).map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
+for (const n of EXPECTED_SKILLS) {
+  check(`スキル ${n} がどこかから参照されている`, REFERRERS.includes(n));
+}
+
+// 役割の重複：description が同一のスキルがないこと
+check('スキルの description が重複していない', (() => {
+  const ds = skillDirs.map((d) => {
+    const fm = parseFrontmatter(fs.readFileSync(path.join(SKILL_DIR, d, 'SKILL.md'), 'utf8'));
+    return (fm.data && fm.data.description) || '';
+  });
+  return new Set(ds).size === ds.length;
+})());
+
+// スキルとエージェントの責務が衝突していないこと（同名を作らない）
+check('スキル名とエージェント名が重複していない',
+  [...skillNames].every((n) => !agentNames.has(n)));
+
+// 参照しているファイルが実在すること
+for (const d of skillDirs) {
+  const text = fs.readFileSync(path.join(SKILL_DIR, d, 'SKILL.md'), 'utf8');
+  const refs = [...text.matchAll(/`((?:\.claude|docs|tests)\/[\w./-]+)`/g)].map((m) => m[1]);
+  const missing = refs.filter((r) => !fs.existsSync(path.join(ROOT, r)) && !r.includes('*'));
+  check(`${d}: 参照しているリポジトリ内パスが実在する（${refs.length} 件）`,
+    missing.length === 0, `欠落=${missing.join(', ')}`);
+}
 
 /* ------------------------------------------------------------------ */
 section('5. settings.json（permission と hooks）');
@@ -343,6 +496,19 @@ check('技術的ガードの限界の要点が safety に残っている',
   safety.includes('## 6. 技術的ガードの限界') && safety.includes('本番環境は識別できない'));
 check('成果物の表記ルール（quality 第8節）', quality.includes('## 8. 成果物の表記'));
 check('判定基準が reporting にある', reporting.includes('PASS_WITH_WARNINGS'));
+// 今回追加した方針が常時読み込み側に残っていること
+check('Bash があれば書ける旨が CLAUDE.md にある',
+  claudeMd.includes('`Bash` があればファイルは書ける'));
+check('Agent は Orchestrator のみである旨が CLAUDE.md にある',
+  claudeMd.includes('Orchestrator のみが持つ'));
+check('ツール権限が役割境界の一部である旨が agent-conduct にある',
+  conduct.includes('ツール権限は役割境界の一部'));
+check('Bash を持つ役割の残存リスクが agent-conduct にある',
+  conduct.includes('書ける経路が残る'));
+check('スキルの allowed-tools 方針が safety にある',
+  safety.includes('allowed-tools') && safety.includes('制限するものではない'));
+check('承認範囲なしの Git 書き込みを拒否する設計が approval にある',
+  approval.includes('fail closed') && approval.includes('承認範囲ファイルが必要'));
 
 section('6b. 文書が実態と一致していること');
 

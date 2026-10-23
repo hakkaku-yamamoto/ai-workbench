@@ -178,6 +178,12 @@ GitHub 側でも `protect-main` Ruleset により PR 必須・削除禁止・for
 
 **承認回数を減らすために危険な操作を無条件で許可してはならない。**
 
+**スキルの `allowed-tools` も「許可」である。**
+公式仕様では `allowed-tools` は列挙したツールの使用を**許可する**
+フィールドであり、制限するものではない（制限は `disallowed-tools`）。
+`allow` を空に保つ方針と矛盾するため、本基盤のスキルでは使用しない
+（[../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) 4.0）。
+
 個別に必要な操作は、**各プロジェクトで中身を検証してから**
 そのプロジェクトの `.claude/settings.json` または各開発者の
 `.claude/settings.local.json` で**狭く**許可する（`npm run *` ではなく

@@ -1,7 +1,6 @@
 ---
 name: write-completion-report
 description: 作業の完了報告を作成する。一括承認で進めた作業を終えたとき、または人間に成果を引き渡すときに使う。未検証項目をPASSと書かないための手順。
-allowed-tools: Read, Grep, Glob, Bash
 ---
 
 完了報告を作成します。適用するルールは `.claude/rules/reporting.md` です。
@@ -74,3 +73,13 @@ allowed-tools: Read, Grep, Glob, Bash
 - **秘密情報（鍵・トークン・パスワード・接続文字列）を報告に含めない。**
   値そのものを出力しない
 - 冗長な自己評価・謝罪・反省を書かない。事実と次の行動を書く
+
+## このスキルが使うツール
+
+読み取りと報告の作成のみ。
+
+**frontmatter に `allowed-tools` は書かない。**
+公式仕様では `allowed-tools` は列挙したツールの**使用を許可する**フィールドであり、
+制限するものではない（制限は `disallowed-tools`）。
+本リポジトリは「共通配布では何も無条件許可しない（`allow` は空）」方針のため、
+スキル側から権限を付与しない。
