@@ -42,6 +42,121 @@ const GIT_NEEDS_APPROVAL = new Set([
 ]);
 
 /**
+ * `git tag` は一覧表示と作成を同じサブコマンド名で行う。
+ * [github.md](../rules/github.md) 第 6 節は**一覧・内容の確認を許可**している
+ * ため、読み取り形を承認必須として遮断してはならない。
+ *
+ * 書き込みと判定する条件
+ * - 作成・削除・署名・強制上書きのフラグがある
+ * - または、一覧フラグが無いのに位置引数（タグ名）がある
+ *
+ * 読み取りと判定する例
+ * - `git tag`（引数なし。一覧）
+ * - `git tag -l` / `--list` / `-l "v1*"`（パターンは一覧の引数）
+ * - `git tag -n` / `--contains` / `--points-at` / `--merged` / `--sort` / `--format`
+ */
+const TAG_WRITE_FLAGS = [
+  '-d', '--delete', '-a', '--annotate', '-s', '--sign', '-m', '--message',
+  '-f', '--force', '-F', '--file', '-u', '--local-user', '--edit', '--create-reflog',
+];
+const TAG_LIST_FLAGS = [
+  '-l', '--list', '-n', '--contains', '--no-contains', '--points-at',
+  '--merged', '--no-merged', '--sort', '--format', '-i', '--ignore-case', '--column',
+];
+function isTagWrite(args) {
+  const flags = args.filter((a) => a.startsWith('-'));
+  // 明示的な書き込みフラグ
+  if (flags.some((f) => TAG_WRITE_FLAGS.includes(f))) return true;
+  // 短縮フラグの連結（`-am` 等）に書き込みを示す文字が含まれる場合
+  if (flags.some((f) => /^-[a-zA-Z]+$/.test(f) && /[dasmfFu]/.test(f.slice(1)))) return true;
+  // 一覧フラグがあれば、位置引数はパターン指定なので読み取り
+  if (flags.some((f) => TAG_LIST_FLAGS.includes(f)
+    || TAG_LIST_FLAGS.some((l) => f.startsWith(l + '=')))) return false;
+  // 一覧フラグが無いのにタグ名がある → 作成
+  return args.some((a) => !a.startsWith('-'));
+}
+
+/**
+ * 承認範囲の `gitOperations` と git サブコマンドの対応。
+ *
+ * [approval.md](../rules/approval.md) 7-1 の第 6 項が列挙するのは
+ * **commit / push / PR 作成の 3 つだけ**であり、7-2 は
+ * 「書かれていないものは許可されない」と定めている。
+ * したがって、この 3 つに対応しない操作は、承認範囲があっても通さない。
+ *
+ * 不具合の経緯：以前は `gitOperations` を参照しているのが
+ * `scope-branch-guard` の push 判定だけで、`commit` と `pullRequest` が
+ * **false でも通っていた。** 承認範囲に書いた可否が無視されていた。
+ */
+const GIT_OP_FLAG = { commit: 'commit', push: 'push' };
+
+function judgeGitOperation(name, scope) {
+  const g = (scope && scope.gitOperations) || {};
+  const flag = GIT_OP_FLAG[name];
+  if (flag) {
+    if (g[flag] === true) return { ok: true };
+    return {
+      ok: false,
+      reason: `承認範囲で git ${name} が許可されていません（gitOperations.${flag} が ${JSON.stringify(g[flag])}）。`
+        + '許可されていない Git 操作は実行できません。人間に承認範囲の第 6 項を確認してください。',
+    };
+  }
+  // commit / push / PR 作成のいずれにも当たらない承認必須操作
+  return {
+    ok: false,
+    reason: `git ${name} は承認範囲の gitOperations（commit / push / pullRequest）の`
+      + 'いずれにも対応しないため許可されません。'
+      + '承認範囲で許可できるのは commit・push・PR 作成の 3 つだけです（approval.md 7-2）。'
+      + 'この操作が必要な場合は、人間に個別の承認を求めてください。',
+  };
+}
+
+/**
+ * gh のサブコマンドを承認範囲に対して判定する。
+ *
+ * - `pr merge` は **`pullRequest: true` でも常に禁止**
+ *   （[safety.md](../rules/safety.md) 1-b。merge は常に人間が行う）
+ * - `pr create` は `pullRequest: true` のときだけ許可
+ * - それ以外の PR 書き込み（edit / close / review / comment / reopen / ready）は
+ *   承認範囲の第 6 項の「PR 作成」に含まれないため許可しない
+ * - PR 以外の gh 書き込み（issue / repo / release / secret / variable /
+ *   workflow / ruleset / label）も同様に許可しない
+ */
+function judgeGhOperation(positional, scope) {
+  const [a, b] = positional;
+  const op = `${a || ''} ${b || ''}`.trim();
+  const g = (scope && scope.gitOperations) || {};
+
+  if (a === 'pr' && b === 'merge') {
+    return {
+      ok: false,
+      reason: 'PR の merge は承認範囲に関わらず禁止です（gitOperations.pullRequest が true でも許可されません）。'
+        + 'merge は常に人間が行います。',
+    };
+  }
+  if (a === 'pr' && b === 'create') {
+    if (g.pullRequest === true) return { ok: true };
+    return {
+      ok: false,
+      reason: `承認範囲で PR 作成が許可されていません（gitOperations.pullRequest が ${JSON.stringify(g.pullRequest)}）。`,
+    };
+  }
+  return {
+    ok: false,
+    reason: `gh ${op} は承認範囲で許可できる操作（commit / push / PR 作成）に含まれないため許可されません。`
+      + 'PR 作成の承認は、PR の編集・クローズ・レビュー・コメントの承認ではありません（approval.md 第 1 節）。'
+      + 'この操作が必要な場合は、人間に個別の承認を求めてください。',
+  };
+}
+
+/** 承認必須か（サブコマンド名だけでは決められないものを個別に判定する） */
+function needsApproval(git) {
+  if (!GIT_NEEDS_APPROVAL.has(git.name)) return false;
+  if (git.name === 'tag') return isTagWrite(git.args);
+  return true;
+}
+
+/**
  * ラッパー経由（`bash -c` / `npx` / `xargs` 等）に、承認を要する操作の
  * 記述が含まれているか。
  *
@@ -155,7 +270,7 @@ S.run(HOOK, () => {
         }
       }
       // 承認範囲が無い状態での承認必須操作は拒否する（fail closed）
-      if (!scope && GIT_NEEDS_APPROVAL.has(git.name)) {
+      if (!scope && needsApproval(git)) {
         S.block(HOOK,
           `git ${git.name} は承認が必要な操作ですが、タスクスコープ承認が宣言されていません。` +
           '人間が発行した承認範囲ファイルが無い状態では実行できません。' +
@@ -171,6 +286,11 @@ S.run(HOOK, () => {
           S.block(HOOK,
             `承認された対象リポジトリは ${scope.repository} ですが、現在の origin は ${origin} です（git ${git.name}）`);
         }
+      }
+      // 承認範囲がある場合、gitOperations で許可された操作だけを通す
+      if (scope && needsApproval(git)) {
+        const v = judgeGitOperation(git.name, scope);
+        if (!v.ok) S.block(HOOK, v.reason);
       }
     }
 
@@ -203,6 +323,12 @@ S.run(HOOK, () => {
           `gh ${positional.slice(0, 2).join(' ')} は承認が必要な操作ですが、` +
           'タスクスコープ承認が宣言されていません。' +
           '人間が発行した承認範囲ファイルが無い状態では実行できません。');
+      }
+      // 承認範囲がある場合、gitOperations で許可された gh 操作だけを通す。
+      // `pr merge` は pullRequest: true でも禁止。
+      if (isWrite && scope) {
+        const v = judgeGhOperation(positional, scope);
+        if (!v.ok) S.block(HOOK, v.reason);
       }
       if (isWrite && scope) {
         const origin = originRepo(cwd);

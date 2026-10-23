@@ -509,6 +509,19 @@ check('スキルの allowed-tools 方針が safety にある',
   safety.includes('allowed-tools') && safety.includes('制限するものではない'));
 check('承認範囲なしの Git 書き込みを拒否する設計が approval にある',
   approval.includes('fail closed') && approval.includes('承認範囲ファイルが必要'));
+// gitOperations の 3 項目の強制（false なのに通る不具合の再発防止）
+check('gitOperations を Hook が照合する旨が approval にある',
+  approval.includes('gitOperations') && approval.includes('Hook が機械的に照合'));
+check('PR 作成の承認が PR 編集の承認でない旨が approval にある',
+  approval.includes('PR の編集・クローズ・レビュー・コメントの承認ではない'));
+check('PR merge は pullRequest=true でも不可である旨が approval にある',
+  approval.includes('`pullRequest` が `true` でも実行できない'));
+// `arch` は第 6b 節で読み込むため、ここでは個別に読む
+const archEarly = fs.readFileSync(path.join(ROOT, 'docs', 'ARCHITECTURE.md'), 'utf8');
+check('gitOperations の判定表が ARCHITECTURE にある',
+  archEarly.includes('11-6-b') && archEarly.includes('`commit` と `pullRequest` は `false` でも通っていた'));
+check('不明な操作は安全側に倒す旨が ARCHITECTURE にある',
+  archEarly.includes('不明な操作は安全側に倒す'));
 
 section('6b. 文書が実態と一致していること');
 
@@ -567,8 +580,22 @@ check('agent-conduct.md の名簿に実体のない役割が載っていない',
 check('Hooks が未実装と書かれていない（実装済のため）', !/Hooks[^\n|]*\|[^\n|]*\*\*未実装\*\*/.test(arch));
 check('agents / skills が未作成と書かれていない', !arch.includes('（未作成）エージェント定義')
   && !arch.includes('（未作成）スキル定義'));
-check('実機での発火が未確認であることが明記されている（過大報告の防止）',
+check('実機確認の範囲と未確認事項が明記されている（過大報告の防止）',
   arch.includes('実機') && arch.includes('未確認') && claudeMd.includes('未確認'));
+// 4 本すべて確認できたかのような書き方をしていないこと
+check('実機発火は 4 本のうち 2 本であると明記している',
+  arch.includes('4 本のうち 2 本') && claudeMd.includes('2 本'));
+check('ask の実機検証が未了であると明記している',
+  arch.includes('`ask` ルールが実機で効くか') && safety.includes('`ask` ルールが実機で効くかは未確認'));
+check('Hooks が起点依存であることが明記されている',
+  arch.includes('プロジェクトルートを起点') && claudeMd.includes('プロジェクトルートを起点'));
+check('git tag の読み書き判定が文書化されている',
+  arch.includes('一覧表示と作成を同じサブコマンド名'));
+// 自己申告を検証結果として扱わないこと（過大報告の防止）
+check('サブエージェントの自己申告を検証結果としない旨が明記されている',
+  arch.includes('自己申告を権限制限の検証結果として扱わない'));
+check('ask の出し元が区別できないことが明記されている',
+  arch.includes('その出し元（`ask` ルール / auto モードの分類器 / アプリの承認 UI）は区別できない'));
 
 section('7. 常時読み込み容量');
 

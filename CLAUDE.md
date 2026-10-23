@@ -125,7 +125,8 @@ CLAUDE.md は**入口**である。ここには最上位原則と詳細ルール
 公式仕様上、`ask` ルールは `allow` ルールよりも、`PreToolUse` Hook の判断よりも優先される。
 そのため **commit・push・PR 作成は `ask` に残してあり、一括承認を宣言しても確認プロンプトが出る。**
 無人で進めるには、これらを `ask` から外して Hook の exit code 2 で遮断する構成へ移す必要がある。
-Hook は実装・登録済（`.claude/hooks/`）だが、**実機セッションでの発火確認ができていない**ため `ask` を維持している。
+Hook は実装・登録済で、**プロジェクトルート起点のセッションでは実機でも発火することを確認した**（`.claude/hooks/`）。
+ただし **`ask` ルールが実機で効くかは未確認**であるため、`ask` は維持している。
 詳細は [.claude/rules/safety.md](.claude/rules/safety.md) 5-3 と [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 第 9 節・第 11 節。
 
 **これは多層防御の一層にすぎず、単独で安全性を保証しない。**
@@ -141,7 +142,7 @@ Hook は実装・登録済（`.claude/hooks/`）だが、**実機セッション
 
 本リポジトリには共通ルール・設計書、安全確認 Hooks（`.claude/hooks/`）、
 エージェント定義（`.claude/agents/`、8 件）、スキル（`.claude/skills/`、7 件）、
-テスト（`tests/`、589 件）が存在する。
+テスト（`tests/`、657 件）が存在する。
 
 エージェントのツール権限は最小権限で設計している。
 **`Bash` があればファイルは書けるため、`Edit` / `Write` が無いことは
@@ -152,7 +153,8 @@ Hook は実装・登録済（`.claude/hooks/`）だが、**実機セッション
 
 未確認・未整備の事項：
 
-- **Hooks の実機セッションでの発火は未確認である**（[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 11-5）。
+- **Hooks は実機で発火することを確認した**（[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 11-5-c）。
+  確認できたのは 4 本のうち `scope-file-guard` と `scope-repo-guard` の 2 本で、残り 2 本と `ask` は未確認。
   **プロジェクトルートを起点に起動したセッションでないと、プロジェクト設定と Hooks は読み込まれない。**
   既存セッションの作業ディレクトリを移すことでは代替できない（11-5-b で実機確認済）。
 - エージェント・スキルの定義は静的に検証済だが、**実際の委譲動作は未検証である。**

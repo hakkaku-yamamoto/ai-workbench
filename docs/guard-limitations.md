@@ -97,7 +97,7 @@ Claude Code の組み込みラッパー除去対象ではない。
 | GitHub Ruleset（`protect-main`） | サーバ側強制。`main` の PR 必須・削除禁止・force push 禁止 | **設定済・Active** |
 | 最小権限の認証 | トークンのスコープを必要最小限に絞る。本番の認証情報をエージェントの実行環境に置かない | 未整備（次工程） |
 | permission ルール（`settings.json`） | セッション内の事故防止。善意の誤操作を止める | **設定済**（限界は 6-1〜6-7） |
-| Hooks（`PreToolUse` 等） | ツール呼び出しの決定論的な遮断。exit code 2 で停止 | **実装済・登録済だが実機での発火は未確認**（[../hooks/README.md](../.claude/hooks/README.md)、[../../docs/ARCHITECTURE.md](ARCHITECTURE.md) 第 11 節） |
+| Hooks（`PreToolUse` 等） | ツール呼び出しの決定論的な遮断。exit code 2 で停止 | **実装済・登録済。実機での発火も確認済**（4 本のうち 2 本。[ARCHITECTURE.md](ARCHITECTURE.md) 11-5-c）。**ただしプロジェクトルート起点で開始したセッションに限る。起点が違えば一切効かない** |
 | ルール文書（`.claude/rules/`） | エージェントの判断基準 | **設定済** |
 | 人間の承認 | 最終的な責任の所在 | 常時 |
 

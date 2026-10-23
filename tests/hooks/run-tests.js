@@ -82,6 +82,18 @@ const scopeNoPush = writeScope(Object.assign({}, SCOPE, {
 }));
 const scopeAbsent = path.join(TMP, 'does-not-exist.json');
 
+/** gitOperations の 3 フラグを個別に切り替えた承認範囲 */
+function scopeWithOps(commit, push, pullRequest) {
+  return writeScope(Object.assign({}, SCOPE, {
+    gitOperations: { commit, push, pullRequest },
+  }));
+}
+const scopeAllFalse = scopeWithOps(false, false, false);
+const scopeAllTrue = scopeWithOps(true, true, true);
+const scopeCommitOnly = scopeWithOps(true, false, false);
+const scopePushOnly = scopeWithOps(false, true, false);
+const scopePrOnly = scopeWithOps(false, false, true);
+
 const repoOk = makeRepo('ai-workbench', 'https://github.com/example-owner/example-repo.git', 'setup/step1-common-rules');
 const repoOther = makeRepo('other-repo', 'https://github.com/example-owner/other-repo.git', 'setup/step1-common-rules');
 const repoOnMain = makeRepo('on-main', 'https://github.com/example-owner/example-repo.git', 'main');
@@ -511,6 +523,31 @@ check('承認範囲なし: git rebase を拒否',
   runHook('scope-repo-guard.js', bashInput(repoOk, 'git rebase main'), ABS), BLOCK);
 check('承認範囲なし: git tag の作成を拒否',
   runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag v1.0.0'), ABS), BLOCK);
+
+// `git tag` は一覧と作成が同じサブコマンド名。github.md 第 6 節は一覧を許可している。
+// 実機確認で `git tag -l` を遮断してしまう不具合が見つかったため、読み書きを判定する。
+check('承認範囲なし: git tag -l（一覧）は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag -l'), ABS), OK);
+check('承認範囲なし: git tag（引数なしの一覧）は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag'), ABS), OK);
+check('承認範囲なし: git tag --list は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag --list'), ABS), OK);
+check('承認範囲なし: git tag -l でパターンを指定しても通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag -l v1*'), ABS), OK);
+check('承認範囲なし: git tag -n（注釈つき一覧）は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag -n'), ABS), OK);
+check('承認範囲なし: git tag --points-at は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag --points-at HEAD'), ABS), OK);
+check('承認範囲なし: git tag --sort= は通る',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag --sort=-creatordate'), ABS), OK);
+check('承認範囲なし: git tag -a -m（注釈つき作成）は拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag -a v1 -m msg'), ABS), BLOCK);
+check('承認範囲なし: git tag -am（連結フラグの作成）は拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag -am msg v1'), ABS), BLOCK);
+check('承認範囲なし: git tag -d（削除）は拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag -d v1'), ABS), BLOCK);
+check('承認範囲なし: git tag -f（強制上書き）は拒否',
+  runHook('scope-repo-guard.js', bashInput(repoOk, 'git tag -f v1'), ABS), BLOCK);
 check('承認範囲なし: gh pr create を拒否',
   runHook('scope-repo-guard.js', bashInput(repoOk, 'gh pr create --title x --body y'), ABS), BLOCK);
 check('承認範囲なし: gh pr merge を拒否',
@@ -555,6 +592,92 @@ check('bash -c で Git と無関係なコマンドは通る',
   runHook('scope-repo-guard.js', bashInput(repoOk, 'bash -c "ls -la src"'), ABS), OK);
 check('文書内の文字列検索は遮断しない（ラッパーでないため）',
   runHook('scope-repo-guard.js', bashInput(repoOk, 'grep -rn "git commit" docs'), ABS), OK);
+
+section('5-e. gitOperations の 3 フラグの強制（回帰テスト）');
+
+/**
+ * 発見した不具合：`gitOperations` を参照しているのは scope-branch-guard の
+ * push 判定だけで、`commit` と `pullRequest` は **false でも通っていた。**
+ * 承認範囲に書いた可否が無視されていた。
+ * 「false なのに通過する」ケースを回帰テストとして固定する。
+ */
+function gitOpCheck(desc, scopeFile, command, want) {
+  // repo-guard と branch-guard の両方を通し、どちらかが遮断すれば遮断とみなす
+  const a = runHook('scope-repo-guard.js', bashInput(repoOk, command), { scope: scopeFile });
+  const b = runHook('scope-branch-guard.js', bashInput(repoOk, command), { scope: scopeFile });
+  const code = (a.code === BLOCK || b.code === BLOCK) ? BLOCK : (a.code || b.code);
+  check(desc, { code, stderr: a.stderr || b.stderr }, want);
+}
+
+// --- すべて false：3 操作とも拒否されること（回帰）---
+gitOpCheck('commit=false なら commit を拒否（回帰）', scopeAllFalse, 'git commit -m x', BLOCK);
+gitOpCheck('push=false なら push を拒否', scopeAllFalse, 'git push origin setup/step1-common-rules', BLOCK);
+gitOpCheck('pullRequest=false なら PR 作成を拒否（回帰）', scopeAllFalse, 'gh pr create --title x --body y', BLOCK);
+
+// --- すべて true：承認された 3 操作だけが通ること ---
+gitOpCheck('commit=true なら commit は通る', scopeAllTrue, 'git commit -m x', OK);
+gitOpCheck('push=true なら承認ブランチへの push は通る', scopeAllTrue, 'git push origin setup/step1-common-rules', OK);
+gitOpCheck('pullRequest=true なら PR 作成は通る', scopeAllTrue, 'gh pr create --title x --body y', OK);
+
+// --- フラグごとの独立性 ---
+gitOpCheck('commit のみ true：commit は通る', scopeCommitOnly, 'git commit -m x', OK);
+gitOpCheck('commit のみ true：push は拒否', scopeCommitOnly, 'git push origin setup/step1-common-rules', BLOCK);
+gitOpCheck('commit のみ true：PR 作成は拒否', scopeCommitOnly, 'gh pr create --title x --body y', BLOCK);
+gitOpCheck('push のみ true：commit は拒否', scopePushOnly, 'git commit -m x', BLOCK);
+gitOpCheck('push のみ true：push は通る', scopePushOnly, 'git push origin setup/step1-common-rules', OK);
+gitOpCheck('PR のみ true：commit は拒否', scopePrOnly, 'git commit -m x', BLOCK);
+gitOpCheck('PR のみ true：PR 作成は通る', scopePrOnly, 'gh pr create --title x --body y', OK);
+
+// --- PR merge は pullRequest=true でも絶対禁止 ---
+gitOpCheck('pullRequest=true でも gh pr merge は禁止', scopeAllTrue, 'gh pr merge 1', BLOCK);
+gitOpCheck('pullRequest=true でも --auto 付き merge は禁止', scopeAllTrue, 'gh pr merge 1 --auto --squash', BLOCK);
+gitOpCheck('pullRequest=false でも gh pr merge は禁止', scopeAllFalse, 'gh pr merge 1', BLOCK);
+gitOpCheck('承認範囲なしでも gh pr merge は禁止', scopeAbsent, 'gh pr merge 1', BLOCK);
+
+// --- 「PR 作成」の承認は他の PR 書き込みの承認ではない ---
+gitOpCheck('pullRequest=true でも pr edit は拒否', scopeAllTrue, 'gh pr edit 1 --title y', BLOCK);
+gitOpCheck('pullRequest=true でも pr close は拒否', scopeAllTrue, 'gh pr close 1', BLOCK);
+gitOpCheck('pullRequest=true でも pr review は拒否', scopeAllTrue, 'gh pr review 1 --approve', BLOCK);
+gitOpCheck('pullRequest=true でも pr comment は拒否', scopeAllTrue, 'gh pr comment 1 --body x', BLOCK);
+gitOpCheck('pullRequest=true でも pr reopen は拒否', scopeAllTrue, 'gh pr reopen 1', BLOCK);
+
+// --- PR 以外の gh 書き込みも承認範囲の対象外 ---
+gitOpCheck('すべて true でも issue create は拒否', scopeAllTrue, 'gh issue create --title z', BLOCK);
+gitOpCheck('すべて true でも release create は拒否', scopeAllTrue, 'gh release create v1', BLOCK);
+gitOpCheck('すべて true でも secret set は拒否', scopeAllTrue, 'gh secret set NAME', BLOCK);
+gitOpCheck('すべて true でも ruleset create は拒否', scopeAllTrue, 'gh ruleset create', BLOCK);
+gitOpCheck('すべて true でも repo delete は拒否', scopeAllTrue, 'gh repo delete owner/x', BLOCK);
+
+// --- 読み取りは通ること（過剰遮断の防止）---
+gitOpCheck('すべて false でも gh pr view は通る', scopeAllFalse, 'gh pr view 1', OK);
+gitOpCheck('すべて false でも git status は通る', scopeAllFalse, 'git status', OK);
+gitOpCheck('すべて false でも git diff は通る', scopeAllFalse, 'git diff', OK);
+gitOpCheck('すべて false でも git tag -l は通る', scopeAllFalse, 'git tag -l', OK);
+gitOpCheck('すべて true でも git tag の作成は拒否（3 フラグに対応しない）', scopeAllTrue, 'git tag v1', BLOCK);
+
+// --- commit/push/PR に対応しない git 操作は承認範囲でも通さない ---
+gitOpCheck('すべて true でも git merge は拒否', scopeAllTrue, 'git merge feat/x', BLOCK);
+gitOpCheck('すべて true でも git rebase は拒否', scopeAllTrue, 'git rebase main', BLOCK);
+gitOpCheck('すべて true でも git filter-branch は拒否', scopeAllTrue, 'git filter-branch --all', BLOCK);
+
+// --- 不正・期限切れ・対象外は安全側 ---
+gitOpCheck('壊れた承認範囲では commit を拒否', scopeBroken, 'git commit -m x', BLOCK);
+gitOpCheck('必須項目が欠けた承認範囲では commit を拒否', scopeMissingKeys, 'git commit -m x', BLOCK);
+gitOpCheck('期限切れの承認範囲では commit を拒否', scopeExpired, 'git commit -m x', BLOCK);
+check('対象外リポジトリでは commit を拒否（すべて true でも）',
+  runHook('scope-repo-guard.js', bashInput(repoOther, 'git commit -m x'), { scope: scopeAllTrue }), BLOCK);
+check('対象外ブランチへの push は拒否（push=true でも）',
+  runHook('scope-branch-guard.js', bashInput(repoOk, 'git push origin other/branch'), { scope: scopeAllTrue }), BLOCK);
+check('main への push は拒否（push=true でも）',
+  runHook('scope-branch-guard.js', bashInput(repoOk, 'git push origin main'), { scope: scopeAllTrue }), BLOCK);
+
+// --- コマンド指定の違い（表記を変えても判定が変わらないこと）---
+gitOpCheck('commit=false：--message 形式でも拒否', scopeAllFalse, 'git commit --message=x', BLOCK);
+gitOpCheck('commit=false：-am 形式でも拒否', scopeAllFalse, 'git commit -am x', BLOCK);
+gitOpCheck('commit=false：PowerShell 経由でも拒否', scopeAllFalse, 'git commit -m x', BLOCK);
+gitOpCheck('pullRequest=false：--repo 指定の PR 作成も拒否', scopeAllFalse,
+  'gh pr create --repo example-owner/example-repo --title x --body y', BLOCK);
+gitOpCheck('commit=false：&& で連結しても拒否', scopeAllFalse, 'git status && git commit -m x', BLOCK);
 
 section('5-c. --no-writes（読み取り専用役割に Bash を与える場合）');
 
