@@ -117,6 +117,32 @@ function disallowedList(name) {
   const fm = parseFrontmatter(fs.readFileSync(path.join(AGENT_DIR, `${name}.md`), 'utf8'));
   return ((fm.data && fm.data.disallowedTools) || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
+/**
+ * frontmatter の `skills:` を配列で返す（無ければ空配列）。
+ *
+ * parseFrontmatter は行頭アンカーの正規表現で key: value を読むため、
+ * インデントされたリスト項目（`  - name`）を取得できない。
+ * そのため frontmatter の原文から `skills:` ブロックだけを読み直す。
+ * 公式仕様の skills フィールドの型は YAML list なので、
+ * 本基盤ではブロックリスト記法のみを正とする（カンマ区切りは空配列になる）。
+ * 行頭アンカーのため、`hooks:` 配下に紛れ込んだ `  skills:` は拾わない。
+ */
+function skillList(name) {
+  const text = fs.readFileSync(path.join(AGENT_DIR, `${name}.md`), 'utf8');
+  if (!text.startsWith('---')) return [];
+  const end = text.indexOf('\n---', 3);
+  if (end < 0) return [];
+  const lines = text.slice(3, end).split(/\r?\n/);
+  const start = lines.findIndex((l) => /^skills:\s*$/.test(l));
+  if (start < 0) return [];
+  const out = [];
+  for (const line of lines.slice(start + 1)) {
+    const m = line.match(/^\s+-\s*(.+?)\s*$/);
+    if (!m) break;
+    out.push(m[1].replace(/^['"]|['"]$/g, ''));
+  }
+  return out;
+}
 
 for (const n of NO_EDIT) {
   const p = path.join(AGENT_DIR, `${n}.md`);
@@ -400,6 +426,61 @@ for (const d of skillDirs) {
   const missing = refs.filter((r) => !fs.existsSync(path.join(ROOT, r)) && !r.includes('*'));
   check(`${d}: 参照しているリポジトリ内パスが実在する（${refs.length} 件）`,
     missing.length === 0, `欠落=${missing.join(', ')}`);
+}
+
+/* ------------------------------------------------------------------ */
+section('4b. エージェントとスキルの対応');
+
+/** エージェント起動時に preload するスキル（役割の責務に直結するものだけ） */
+const AGENT_SKILLS = {
+  orchestrator: ['plan-implementation', 'write-completion-report'],
+  architect: ['survey-project'],
+  developer: ['fix-with-tests'],
+  reviewer: ['review-code'],
+  security: ['check-security'],
+  'uiux-designer': ['check-uiux'],
+};
+/** 意図的に skills を付けない役割（付け忘れと区別するため明示する） */
+const NO_SKILLS = ['tester', 'documenter'];
+
+for (const [n, list] of Object.entries(AGENT_SKILLS)) {
+  const actual = skillList(n);
+  check(`${n}: skills が対応表どおり（${list.join(' / ')}）`,
+    actual.length === list.length && list.every((s, i) => actual[i] === s),
+    `実際=${actual.join(', ') || '（なし）'}`);
+  check(`${n}: skills に重複がない`, new Set(actual).size === actual.length,
+    `実際=${actual.join(', ')}`);
+  for (const s of list) {
+    check(`${n}: 列挙しているスキル ${s} が実在する`, skillNames.has(s) && hasSkill(s));
+  }
+}
+for (const n of NO_SKILLS) {
+  const fm = parseFrontmatter(fs.readFileSync(path.join(AGENT_DIR, `${n}.md`), 'utf8'));
+  check(`${n}: skills を持たない（意図的に付けない役割）`,
+    !('skills' in ((fm.data) || {})) && skillList(n).length === 0,
+    `実際=${skillList(n).join(', ')}`);
+}
+check(`対応表がエージェント ${EXPECTED_AGENTS.length} 件を網羅している`, (() => {
+  const listed = [...Object.keys(AGENT_SKILLS), ...NO_SKILLS];
+  const actual = agentFiles.map((f) => path.basename(f, '.md'));
+  return new Set(listed).size === listed.length
+    && listed.length === actual.length
+    && actual.every((n) => listed.includes(n));
+})(), '対応表の保守漏れ（エージェントの追加・削除に追従していない）');
+
+// skills: が hooks: の配下に入ると YAML 構造が壊れ、Hook と既存テストの両方が壊れる。
+// parseFrontmatter は行頭の key: value しか読まないため、
+// data に skills があることがトップレベルである証拠になる。
+for (const n of Object.keys(AGENT_SKILLS)) {
+  const text = fs.readFileSync(path.join(AGENT_DIR, `${n}.md`), 'utf8');
+  const raw = text.slice(3, text.indexOf('\n---', 3));
+  const fm = parseFrontmatter(text);
+  check(`${n}: skills がトップレベルのキー（hooks の内部に入っていない）`,
+    'skills' in ((fm.data) || {}) && !/^[ \t]+skills:/m.test(raw));
+  if (/^hooks:/m.test(raw)) {
+    check(`${n}: skills を追加しても hooks がトップレベルのまま`,
+      'hooks' in ((fm.data) || {}) && text.includes('PreToolUse'));
+  }
 }
 
 /* ------------------------------------------------------------------ */

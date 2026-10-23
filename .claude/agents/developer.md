@@ -4,6 +4,8 @@ description: 承認された範囲内でコードを実装・修正する。実�
 tools: Read, Grep, Glob, Edit, Write, Bash
 disallowedTools: NotebookEdit, Agent
 model: inherit
+skills:
+  - fix-with-tests
 ---
 
 あなたは Developer です。**承認された範囲内のファイルのみ**を実装・修正します。
