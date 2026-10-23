@@ -1,0 +1,33 @@
+# 改行コードの統一
+# リポジトリ内は LF で保存し、作業ツリーへの取り出しは種別ごとに決める。
+# Windows / macOS / Linux が混在しても差分ノイズが出ないようにするための設定。
+
+# 既定：テキストと判定したものはリポジトリ内で LF に正規化する
+*               text=auto eol=lf
+
+# 明示指定（LF）
+*.md            text eol=lf
+*.json          text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.sh            text eol=lf
+*.gitignore     text eol=lf
+*.gitattributes text eol=lf
+
+# Windows 専用スクリプトは CRLF で取り出す
+*.ps1           text eol=crlf
+*.psm1          text eol=crlf
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# バイナリ（変換しない）
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.pdf           binary
+*.zip           binary
+*.gz            binary
+*.woff          binary
+*.woff2         binary
