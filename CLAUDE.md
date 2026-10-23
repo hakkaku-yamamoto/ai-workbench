@@ -115,17 +115,18 @@ CLAUDE.md は**入口**である。ここには最上位原則と詳細ルール
 - **`deny`** は「承認があっても実行させない」層に使う。破壊的操作、本番相当の変更、権限変更、`main` への push、PR merge。
 - **`ask`** は「人間の個別承認を得て実行する」層に使う。読み取り・診断を含む調査操作も、承認を得れば実行できるようにする。
 - 読み取り専用の操作を `deny` に入れない。`deny` は `allow` で例外を作れないため、承認による回復手段が失われる。
-- **`allow`** はブランチ作成と `git fetch` のみ（5 件）。保護を `allow` に依存させない。
+- **`allow`** は空。共通配布では何も無条件許可しない。保護を `allow` に依存させない。
   **プロジェクトごとに中身が違うもの（`npm run <script>`、依存インストール、テスト実行）は共通配布の `allow` に入れない。**
-  各プロジェクトで中身を検証してから、そのプロジェクトの設定で狭く許可する（[.claude/rules/safety.md](.claude/rules/safety.md) 5-2）。
+  各プロジェクトで中身を検証してから、そのプロジェクトの設定で狭く許可する（[.claude/rules/safety.md](.claude/rules/safety.md) 5-1）。
 - `defaultMode` は `acceptEdits`。許可範囲内のファイル編集は確認なしで進む。`ask` と `deny` はモードに関わらず効く。
-  ただし **Bash のリダイレクト（`> file`）は `Edit` の `ask` では止まらない**（5-3）。設定ファイル・ルール文書をリダイレクトで書き換えない。
+  ただし **Bash のリダイレクト（`> file`）は `Edit` の `ask` では止まらない**（5-2）。設定ファイル・ルール文書をリダイレクトで書き換えない。
 
 **一括承認と `ask` は両立しない。**
 公式仕様上、`ask` ルールは `allow` ルールよりも、`PreToolUse` Hook の判断よりも優先される。
 そのため **commit・push・PR 作成は `ask` に残してあり、一括承認を宣言しても確認プロンプトが出る。**
-無人で進めるには、これらを `ask` から外して Hook の exit code 2 で遮断する構成へ移す必要があり、Hook は未実装である。
-詳細は [.claude/rules/safety.md](.claude/rules/safety.md) 5-4 と [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 第 9 節。
+無人で進めるには、これらを `ask` から外して Hook の exit code 2 で遮断する構成へ移す必要がある。
+Hook は実装・登録済（`.claude/hooks/`）だが、**実機セッションでの発火確認ができていない**ため `ask` を維持している。
+詳細は [.claude/rules/safety.md](.claude/rules/safety.md) 5-3 と [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 第 9 節・第 11 節。
 
 **これは多層防御の一層にすぎず、単独で安全性を保証しない。**
 特に、**コマンド文字列の照合だけで本番環境を識別することはできない。**
@@ -138,5 +139,13 @@ CLAUDE.md は**入口**である。ここには最上位原則と詳細ルール
 
 ## 現在の状態
 
-本リポジトリには共通ルールと設計書のみが存在する。
-エージェント・スキルの実体、および Hooks は未実装であり、次工程で追加する。
+本リポジトリには共通ルール・設計書、安全確認 Hooks（`.claude/hooks/`）、
+エージェント定義（`.claude/agents/`、8 件）、スキル（`.claude/skills/`、7 件）、
+テスト（`tests/`、431 件）が存在する。
+
+未確認・未整備の事項：
+
+- **Hooks の実機セッションでの発火は未確認である**（[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 11-5）。
+  プロジェクトルートを起点に起動したセッションでないと、プロジェクト設定と Hooks は読み込まれない。
+- エージェント・スキルの定義は静的に検証済だが、**実際の委譲動作は未検証である。**
+- 他リポジトリへの配布（同期スクリプト）は未実装である（[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 第 6 節）。

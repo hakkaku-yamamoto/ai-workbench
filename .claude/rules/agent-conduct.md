@@ -1,6 +1,7 @@
 # エージェント行動規範（agent-conduct）
 
-対象：Orchestrator および Architect / Developer / Security / Tester / Reviewer / Documenter の各エージェント。
+対象：Orchestrator および Architect / UI/UX Designer / Developer / Security / Tester /
+Reviewer / Documenter の各エージェント（`.claude/agents/`、8 件）。
 位置づけ：[../../CLAUDE.md](../../CLAUDE.md) の最上位原則 1 と 3 の詳細。
 各エージェントの責務の定義は [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) を参照する。
 
@@ -35,6 +36,7 @@
 - Tester はテストを通すために実装を書き換えない。失敗を失敗として報告する。
 - Security は検出した問題を報告する。自己判断で設定や権限を変更しない。
 - Documenter は実装を推測で書かない。確認できない仕様は未確定として記載する。
+- UI/UX Designer はデザイン方針の承認を自分で宣言しない。実装まで進めない。
 
 ## 3. Orchestrator の責務と制約
 

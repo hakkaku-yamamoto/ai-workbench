@@ -15,12 +15,13 @@
 ```
 人間（最終承認者）
   └─ Orchestrator（タスク分解・割り当て・集約）
-       ├─ Architect   設計
-       ├─ Developer   実装
-       ├─ Security    安全性検査
-       ├─ Tester      検証
-       ├─ Reviewer    レビュー
-       └─ Documenter  文書化
+       ├─ Architect      設計
+       ├─ UI/UX Designer 画面の情報設計・デザイン方針
+       ├─ Developer      実装
+       ├─ Security       安全性検査
+       ├─ Tester         検証
+       ├─ Reviewer       レビュー
+       └─ Documenter     文書化
 
        すべてのエージェントが参照するもの：
        - 共通ルール（CLAUDE.md + .claude/rules/）
@@ -43,14 +44,40 @@ ai-workbench/
 │   │   ├── quality.md
 │   │   ├── agent-conduct.md
 │   │   └── reporting.md
-│   ├── agents/                  （未作成）エージェント定義
-│   ├── skills/                  （未作成）スキル定義
-│   └── hooks/                   （未作成）決定論的ガード
+│   ├── agents/                  エージェント定義（8 件。第 3 節）
+│   │   ├── orchestrator.md      タスク分解・割当・集約（Agent を持つ）
+│   │   ├── architect.md         設計
+│   │   ├── uiux-designer.md     画面の情報設計・デザイン方針
+│   │   ├── developer.md         実装（Edit / Write を持つ）
+│   │   ├── security.md          安全性検査
+│   │   ├── tester.md            検証
+│   │   ├── reviewer.md          レビュー
+│   │   └── documenter.md        文書化（Edit / Write を持つ）
+│   ├── skills/                  スキル定義（7 件。第 4 節）
+│   │   ├── survey-project/      着手前の調査
+│   │   ├── plan-implementation/ 実装計画
+│   │   ├── review-code/         変更のレビュー
+│   │   ├── fix-with-tests/      修正と再テスト
+│   │   ├── check-security/      秘密情報・権限の検査
+│   │   ├── check-uiux/          画面の調査・方針・レビュー
+│   │   └── write-completion-report/  完了報告
+│   └── hooks/                   決定論的ガード（第 11 節）
+│       ├── lib/                 共通処理（承認範囲の読み込み、シェル解析）
+│       ├── scope-repo-guard.js
+│       ├── scope-branch-guard.js
+│       ├── scope-file-guard.js
+│       ├── secret-scan-precommit.js
+│       └── README.md
+├── tests/
+│   ├── run-all.js               全テストの実行（合計 431 件）
+│   ├── hooks/run-tests.js       Hooks の単体・異常系（113 件。11-8）
+│   └── definitions/run-tests.js 定義・設定・公開可否の検証（318 件。11-9）
 └── docs/
-    └── ARCHITECTURE.md          本書
+    ├── ARCHITECTURE.md          本書
+    ├── permission-policy.md     allow 方針・編集パスの保護・ask と自動化
+    ├── guard-limitations.md     技術的ガードの限界（詳細）
+    └── project-ledger-template.md  プロジェクト台帳のひな型（記入済は Private 領域）
 ```
-
-`agents/`、`skills/`、`hooks/` は本工程では作成しない。次工程で追加する。
 
 ### 1.3 設計方針
 
@@ -91,7 +118,7 @@ Orchestrator
  │  2. タスク全体を分解
  │  3. 各エージェントに「担当分の範囲」だけを引き継ぐ
  ▼
-専門エージェント（Architect / Developer / Security / Tester / Reviewer / Documenter）
+専門エージェント（Architect / UI/UX Designer / Developer / Security / Tester / Reviewer / Documenter）
  │  範囲内で作業 → 結果を返す
  │  範囲外が必要 → 実行せず Orchestrator へ報告
  ▼
@@ -185,15 +212,21 @@ Developer が設定ファイルを触る必要がないなら、その範囲を�
 | 成果物 | ドキュメント、PR 本文案 |
 | してはならないこと | 実装を推測で書く。確認できない仕様を確定として書く。秘密情報を文書に含める |
 
-### 3.7 追加構想：UI/UX Designer
+### 3.7 UI/UX Designer（画面の情報設計・デザイン方針）
 
-現在の 6 役割は、UI/UX 設計を専門に担う役割を持たない。
 Developer が実装の一部として画面を作ると、
 [../.claude/rules/quality.md](../.claude/rules/quality.md) 第 9 節が求める
 調査・3 案比較・既存デザインシステムの尊重が省略されやすい。
+そのため独立した役割として分離した。
 
-UI/UX Designer エージェントの追加を構想している。詳細は 8.4 に記載する。
-**本工程では実体を作成しない。**
+| 項目 | 内容 |
+| :- | :- |
+| 責務 | 利用者・業務・ブランド・既存デザインの調査、情報設計、デザイン方針の 3 案比較提示、既存デザインシステムとの整合性確認 |
+| 成果物 | 調査結果、情報設計、デザイン方針案（原則 3 案）、レビュー所見 |
+| してはならないこと | 調査せずに案を出す。根拠のないブランド要素を創作する。既存デザインシステムを無断で全面変更する。デザイン方針の承認を自分で宣言する。実装まで進める |
+
+**`Edit` / `Write` を持たない。** 方針の承認は人間が行い、実装は Developer が行う。
+手順の詳細は `check-uiux` スキルにある。
 
 ### 3.8 役割境界の原則
 
@@ -329,7 +362,7 @@ Claude Code の `settings.json` は以下の優先順位で解決される（高
 - **プロジェクトごとに中身が違う操作は共通配布の `allow` に入れない。**
   `npm run <script>`、依存インストール、テスト実行などは、各プロジェクトで
   中身を検証してから、そのプロジェクトの設定で狭く許可する
-  （[../.claude/rules/safety.md](../.claude/rules/safety.md) 5-1 / 5-2）。
+  （[../.claude/rules/safety.md](../.claude/rules/safety.md) 5-1、[permission-policy.md](permission-policy.md)）。
 
 **個別の許可は各開発者の `.claude/settings.local.json` で持つ。**
 `ask` の確認プロンプトが業務上過剰だと感じる操作（例：`npx tsc --noEmit` のような
@@ -473,7 +506,7 @@ ai-workbench-private（Private・将来）
 | GitHub Ruleset（`protect-main`） | サーバ側で強制。回避不能 | **設定済・Active**（PR 必須 / 削除禁止 / force push 禁止、bypass actor なし） |
 | 最小権限の認証 | トークンのスコープで制限。**本番の認証情報をエージェントの実行環境に置かない** | 未整備（次工程） |
 | permission ルール（`settings.json`） | セッション内の事故防止。善意の誤操作を止める | **設定済** |
-| Hooks（`PreToolUse` 等） | 決定論的に遮断。exit code 2 でツール呼び出しを停止 | **未実装**（次工程） |
+| Hooks（`PreToolUse` 等） | 決定論的に遮断。exit code 2 でツール呼び出しを停止 | **実装・登録済**（第 11 節）。ただし実機セッションでの発火は未確認（11-5） |
 | ルール文書（`CLAUDE.md` / `.claude/rules/`） | エージェントの判断基準。コンテキストとして渡される指示であり、遵守は保証されない | **設定済** |
 | 人間の承認 | 最終的な責任の所在 | 常時 |
 
@@ -490,7 +523,7 @@ ai-workbench-private（Private・将来）
 スクリプト、依存インストール（`preinstall` / `postinstall` が走る）、
 テスト実行、フォーマッタ、`git add` の無条件許可、`git stash` 系、外部通信。
 理由と代替手段（プロジェクト固有の事前検証方式）は
-[../.claude/rules/safety.md](../.claude/rules/safety.md) 5-1 / 5-2 に記載する。
+[../.claude/rules/safety.md](../.claude/rules/safety.md) 5-1 と [permission-policy.md](permission-policy.md) に記載する。
 
 **読み取り専用の操作を `deny` に入れない。**
 `deny` は `allow` で例外を作れないため、承認による回復手段と、
@@ -547,13 +580,14 @@ Read/Edit ルールの適用範囲、`.env.*` 列挙の非網羅性、PowerShell
 | STEP 1A | リポジトリ作成、`main` 保護（`protect-main` Ruleset） | 完了 |
 | STEP 1B | 共通ルール、permission ガード、設計書の作成 | 完了 |
 | STEP 1C | 作成物の監査（矛盾・過剰制限・公式仕様との整合性） | 完了 |
-| **STEP 1D** | **監査結果の反映（層の整理、`deny` の見直し、配布方式の修正）** | **本工程** |
-| STEP 2 | **承認GATE の強制（Hooks）**。`PreToolUse` による決定論的遮断、承認範囲の照合、秘密情報混入の検査、`main` 保護の二重化。設計は第 9 節 | 未着手 |
-| STEP 3 | エージェント定義（`.claude/agents/`：Orchestrator + 6 役割。UI/UX Designer の追加を検討：8.4.1） | 未着手 |
-| STEP 4 | スキル定義（`.claude/skills/`：定型手順の整理。ブランド調査 / デザインシステム作成 / 画面レビューを含む：8.4.2） | 未着手 |
+| STEP 1D | 監査結果の反映（層の整理、`deny` の見直し、配布方式の修正） | 完了 |
+| STEP 1E–1J | AI 生成表記・UI/UX 方針の追加、commit / push / PR #1、タスクスコープ承認への移行、`allow` の空化 | 完了 |
+| STEP 2 | **承認GATE の強制（Hooks）**。`PreToolUse` による決定論的遮断、承認範囲の照合、秘密情報混入の検査、`main` 保護の二重化。設計は第 9 節 | 実装・登録済（第 11 節）。**実機での発火は未確認（11-5）** |
+| STEP 3 | エージェント定義（`.claude/agents/`：Orchestrator + 7 役割） | 完了（8 件。静的検証済、委譲動作は未検証） |
+| STEP 4 | スキル定義（`.claude/skills/`：定型手順の整理） | 完了（7 件。静的検証済、呼び出し動作は未検証） |
 | STEP 5 | 配布方式の実装（ルール＝同期スクリプト、エージェント・スキル＝Plugin） | 未着手 |
 | STEP 6 | 各アプリへの適用（対象アプリは別途決定。本書には記載しない） | 未着手 |
-| STEP 7 | 最小権限の認証整備、CI による検証の自動化 | 未着手 |
+| STEP 7 | 最小権限の認証整備、CI による検証の自動化 | 未着手（テストは `tests/run-all.js` として実装済。CI への接続が未着手） |
 
 ### 8.1 STEP 2（Hooks）の実装候補
 
@@ -583,7 +617,10 @@ Read/Edit ルールの適用範囲、`.env.*` 列挙の非網羅性、PowerShell
 2. 配布のバージョニング方針（どのバージョンが適用されているかを確認する手段）
 3. Private 領域（`ai-workbench-private`）を実際に作成するかの判断と、その参照方式
 4. Hooks の実装言語と、Windows / POSIX 両対応の方法。Hooks 自身のファイルを保護する設計
-5. エージェントごとの使用可能ツールの制限範囲（`tools` / `disallowedTools`）
+5. ~~エージェントごとの使用可能ツールの制限範囲（`tools` / `disallowedTools`）~~
+   → **決定済。** 各定義の `tools` で明示し、`Edit` / `Write` を持つのは
+   `developer` と `documenter` の 2 件のみとした。
+   `tests/definitions/run-tests.js` が役割境界として機械的に検査する（11-9）
 6. `.claude/rules/` がサブエージェントに届くかの実機検証（5.3）
 7. クラウドセッションで `.claude/rules/` が読み込まれるかの検証（6.6）
 8. CI でのルール検証（JSON 妥当性、リンク切れ、秘密情報スキャン、
@@ -608,12 +645,20 @@ Read/Edit ルールの適用範囲、`.env.*` 列挙の非網羅性、PowerShell
 これらをロードマップに含めているのは、工程として必要だからである。
 エージェントが自動で進めてよいという意味ではない。
 
-### 8.4 UI/UX 関連の追加構想
+### 8.4 UI/UX 関連（実施済）
 
 [../.claude/rules/quality.md](../.claude/rules/quality.md) 第 9 節（UI/UX 設計原則）を
-運用に乗せるための構想。**本工程では実体を作成しない。**
+運用に乗せるための設計。**実体は作成済である。**
 
-#### 8.4.1 UI/UX Designer エージェント（STEP 3 で追加を検討）
+| 構想 | 実施結果 |
+| :- | :- |
+| UI/UX Designer エージェント（8.4.1） | `.claude/agents/uiux-designer.md` として作成。読み取り系のみで `Edit` / `Write` を持たない（3.7） |
+| ブランド調査 / デザインシステム作成 / 画面レビューの 3 スキル（8.4.2） | `check-uiux` スキル 1 件に統合。3 スキルに分けると画面開発のたびに 3 回呼ぶ必要があり、呼び忘れが起きやすいため |
+| UI/UX 専門ルールのスキル化（8.4.3 項目 8） | 実施済。`quality.md` 第 9 節は要点のみを残し、手順の詳細を `check-uiux` スキルへ移した（5.4） |
+
+以下 8.4.1 / 8.4.2 は、上記の判断根拠として当初の構想を残したものである。
+
+#### 8.4.1 UI/UX Designer エージェント（構想。実施済）
 
 | 項目 | 内容 |
 | :- | :- |
@@ -630,7 +675,7 @@ Read/Edit ルールの適用範囲、`.env.*` 列挙の非網羅性、PowerShell
 - エージェントを増やすとコンテキスト消費が増える（5.4）
 - Designer を挟むことで、quality.md 9-3 の 3 案比較が省略されにくくなる
 
-#### 8.4.2 スキルの構想（STEP 4 で追加を検討）
+#### 8.4.2 スキルの構想（`check-uiux` 1 件に統合して実施済）
 
 | スキル | 目的 | 想定する手順 |
 | :- | :- | :- |
@@ -645,7 +690,10 @@ Read/Edit ルールの適用範囲、`.env.*` 列挙の非網羅性、PowerShell
 
 #### 8.4.3 検討が必要な事項
 
-1. UI/UX Designer を追加するか、スキルのみで運用するかの判断
+項目 1 と項目 8 は決着済（8.4 冒頭の表）。残るのは以下である。
+
+1. ~~UI/UX Designer を追加するか、スキルのみで運用するかの判断~~
+   → **両方作成した。** エージェントが方針を出し、スキルが手順を揃える
 2. デザイン方針の承認をどの粒度で取るか（画面単位 / 機能単位 / リリース単位）
 3. 3 案比較が成立しない場合の扱いの運用ルール（quality.md 9-3 に記載済の方針の具体化）
 4. デザイントークンを本リポジトリで管理するか、各アプリ側に置くかの判断
@@ -654,7 +702,8 @@ Read/Edit ルールの適用範囲、`.env.*` 列挙の非網羅性、PowerShell
    （コントラスト比、代替テキストの有無、トークン外の値の検出）
 7. ブランド資産の実体・ガイドラインは組織の非公開情報になりうるため、
    本リポジトリには置かず Private 領域（7.2）に分離する前提とすること
-8. **UI/UX 専門ルールのスキル化または条件付き読み込みへの移行**（5.4 を参照）
+8. ~~**UI/UX 専門ルールのスキル化または条件付き読み込みへの移行**~~（5.4 を参照）
+   → **スキル化で実施済。** 以下は判断の記録である
    - [../.claude/rules/quality.md](../.claude/rules/quality.md) 第 9 節は
      約 4.9 KB（`quality.md` 全体の約 34%）を占め、画面開発時にのみ必要である。
      常時読み込みから外すことでコンテキスト消費を抑えられる
@@ -904,7 +953,7 @@ stop-condition / secret-scan）は、標準機能では代替できない。
 2. **タスク固有の承認範囲は必要最小限の Hooks で保護する**（上記 4 つ）。
 3. **Git 書き込みの `ask` は、安全装置の実機検証が完了するまで維持する。**
 4. **共通配布の `allow` は空に保つ。** 承認削減を `allow` で行わない。
-   個別の許可は [../.claude/rules/safety.md](../.claude/rules/safety.md) 5-2 の
+   個別の許可は [../.claude/rules/safety.md](../.claude/rules/safety.md) 5-1 の
    プロジェクト固有の事前検証方式で行う。
 5. **常時読み込みルールの肥大化を止める。**
    詳細設計は必要時に読み込む資料（本書・スキル）へ分離する。
@@ -929,7 +978,7 @@ stop-condition / secret-scan）は、標準機能では代替できない。
 
 対応：
 - 当面は**ルール文書上の禁止**として扱う
-  （[../.claude/rules/safety.md](../.claude/rules/safety.md) 5-3）
+  （[../.claude/rules/safety.md](../.claude/rules/safety.md) 5-2）
 - 恒久対応は `scope-file-guard` がリダイレクトと `tee` の宛先を検査すること（9.3）
 - `deny` で塞ぐ案もあるが、`deny` にすると人間が Claude Code 経由で
   これらのファイルを編集できなくなるため採用しない
@@ -962,7 +1011,7 @@ stop-condition / secret-scan）は、標準機能では代替できない。
    機密性の高いファイルを含むリポジトリでは `default` に戻す。
 4. 各開発者は `.claude/settings.local.json` の `defaultMode` で上書きできる。
    この手段を周知する。
-5. **5-2 のプロジェクト固有の許可を設定する前に、スクリプトの中身を検証する。**
+5. **5-1 のプロジェクト固有の許可を設定する前に、スクリプトの中身を検証する。**
 
 ### 10-6. 未検証事項
 
@@ -977,3 +1026,225 @@ stop-condition / secret-scan）は、標準機能では代替できない。
 - auto モードの実際の挙動（有効化していない）
 - Sandbox の挙動（本環境では利用不可）
 - permission ルール単位の起動時警告
+
+---
+
+## 11. Hooks の実装記録（STEP 2）
+
+第 9 節の設計のうち、最優先 4 件を実装した。
+**実装は完了し単体テストは全件通ったが、実機セッションでの発火確認は
+できていない**（11-5）。
+
+### 11-1. 実装したもの
+
+| ファイル | 機能 |
+| :- | :- |
+| `.claude/hooks/scope-repo-guard.js` | 承認リポジトリ以外への書き込みを遮断 |
+| `.claude/hooks/scope-branch-guard.js` | 既定ブランチへの直接 push・force push・承認外ブランチへの push を遮断 |
+| `.claude/hooks/scope-file-guard.js` | 承認範囲外のファイル変更を遮断（Edit / Write / NotebookEdit / シェル経由） |
+| `.claude/hooks/secret-scan-precommit.js` | commit 対象の差分の秘密情報検査 |
+| `.claude/hooks/lib/scope.js` | 承認範囲の読み込み・終了コード・パス正規化 |
+| `.claude/hooks/lib/shell.js` | シェルコマンド解析 |
+| `.claude/hooks/README.md` | 仕様と運用 |
+| `tests/hooks/run-tests.js` | 自動テスト |
+
+実装言語は Node.js（本環境 v24.16.0）。外部依存は追加していない。
+
+### 11-2. 承認範囲の表現と置き場所
+
+9.2 の設計に対する実装。承認範囲は **リポジトリ外** の JSON ファイルに置く。
+
+- 探索順：`AI_WORKBENCH_TASK_SCOPE` → `~/.claude/ai-workbench/task-scope.json`
+- 必須キー：`taskId` / `repository` / `branch` / `allowPaths` / `denyPaths` /
+  `gitOperations`
+- 任意キー：`expiresAt` / `protectedBranches` / `forbiddenNames`
+
+リポジトリ内に置かない理由は、エージェント自身が書き換えて保護を解除できて
+しまうためである。形式の詳細は
+[../.claude/hooks/README.md](../.claude/hooks/README.md) に記載する。
+
+### 11-3. fail closed の設計
+
+| 状況 | 動作 |
+| :- | :- |
+| 承認範囲ファイルが無い | **判定しない**（exit 0・無出力）。既存の `deny` / `ask` に委ねる。保護は弱まらない |
+| 承認範囲が壊れている・期限切れ | **拒否**（exit 2） |
+| Hook 入力が不正・空・配列・必須欄欠落 | **拒否** |
+| Hook の内部例外 | **拒否**（`lib/scope.js` の `run()` が例外を exit 2 に変換） |
+| Hook が判定を返さずに終了 | **拒否** |
+| Hook の失敗・タイムアウト | **拒否**（登録時に `"onFailure": "block"`） |
+| 解析できない書き込み経路 | **拒否**（`bash -c` / `sh -c` / 絶対パス実行 / `npx` 等） |
+
+公式仕様上 **`exit 1` は非ブロッキング扱いでツール呼び出しが通る**ため、
+拒否には必ず `exit 2` を使っている。
+
+### 11-4. 登録方式
+
+`.claude/settings.json` の `hooks.PreToolUse` に登録した。
+
+| matcher | Hook |
+| :- | :- |
+| `Bash\|PowerShell` | scope-repo-guard（30秒）/ scope-branch-guard（30秒）/ secret-scan-precommit（120秒） |
+| `Edit\|Write\|NotebookEdit\|Bash\|PowerShell` | scope-file-guard（30秒） |
+
+Windows では exec 形式に実体のある実行ファイルが必要なため、
+`command: "node"` ＋ `args: ["${CLAUDE_PROJECT_DIR}/.claude/hooks/<name>.js"]`
+の形にしている（`.cmd` / `.bat` シムを避ける）。
+全ハンドラに `"onFailure": "block"` を指定している（v2.1.295 以降の機能。
+本環境は 2.1.296）。
+
+既存の `permissions` は変更していない。**Git 書き込みの `ask` は維持している。**
+
+### 11-5. 実機での発火確認ができていない（重要）
+
+テストでは全件通ったが、**このリポジトリで動作中のセッションでは
+Hook も permission ルールも適用されていないことが判明した。**
+
+観測した事実：
+
+- `git push origin main` が実行できた（`Bash(git push origin main*)` は `deny`）
+- `git stash drop` が実行できた（`Bash(git stash drop*)` は `deny`）
+- どちらも Hook の遮断メッセージも確認プロンプトも出なかった
+- 一方、同じ入力を Hook へ直接渡すと正しく exit 2 で遮断された
+
+原因として確認できたこと：
+
+- このセッションは `C:\` を起点に開始され、そこに `.claude/settings.json` は無い
+- リポジトリの `.claude/settings.json` は存在し、`claude doctor` では妥当と判定される
+- `~/.claude/settings.json` に `permissions` は無く、`hooks` も無い
+
+**Claude Code はセッションの主作業ディレクトリから共有プロジェクト設定を読む。**
+セッション開始後にディレクトリがリポジトリへ移っても、このセッションには
+プロジェクト設定が適用されていない。
+
+したがって次が未確認のまま残る。
+
+- 実セッションで Hook が発火すること
+- `matcher` が意図どおり一致すること
+- `${CLAUDE_PROJECT_DIR}` が展開されること
+- `onFailure: "block"` が機能すること
+- `deny` / `ask` ルールが実際に効くこと
+
+**確認するには、リポジトリのディレクトリを起点に Claude Code を起動する必要がある。**
+それまで「Hooks によって保護されている」とは言えない。
+
+### 11-6. 残存する迂回経路
+
+| 経路 | 状況 |
+| :- | :- |
+| `--settings` による設定差し替え | 遮断できない |
+| `CLAUDE_CONFIG_DIR` の変更 | 遮断できない |
+| Hook を無効化するフラグ | 遮断できない。完全な固定には管理設定が必要 |
+| `.claude/hooks/**` の書き換え | `Edit` の `deny` で遮断。ただし Bash のリダイレクトは `deny` と保護パスで検査される |
+| 承認範囲ファイルの書き換え | リポジトリ外にあるが、Bash で到達しうる。OS 権限での保護が必要 |
+| シェル解析の不足 | 変数展開、ヒアドキュメント、エンコードされたコマンド等は解析しきれない |
+| Hook 自体が未適用 | 11-5 のとおり、設定が読まれないセッションでは何も効かない |
+
+**Hooks は事故を手前で止める層であり、最後の砦ではない。**
+既定ブランチの保護の最終的な強制力は GitHub Ruleset（サーバ側）にある。
+
+### 11-7. 一括承認に対応できる範囲（現状）
+
+- Hook のロジックとしては、承認範囲の照合・リポジトリ・ブランチ・ファイル範囲・
+  秘密情報の検査が**動作する**（テストで確認）。
+- ただし 9.6 の移行前提条件のうち、**条件 3（実機での発火確認）が未達**である。
+- したがって **Git 書き込みの `ask` は外していない。**
+  一括承認を宣言しても commit・push・PR 作成は確認を要する設計のままである。
+
+### 11-8. テスト
+
+`tests/hooks/run-tests.js`。`node tests/hooks/run-tests.js` で実行する。
+`node tests/run-all.js` で定義テスト（11-9）と併せて実行できる。
+**113 件すべて通過**（最終実行時）。
+
+| 区分 | 件数 | 内容 |
+| :- | -: | :- |
+| scope-repo-guard | 12 | 正しいリポジトリの許可 / 別リポジトリの拒否 / `git -C` による作業ツリー外指定の拒否 / `gh --repo` の照合 / 読み取り系の許可 / 承認範囲の不正・欠落・期限切れの拒否 |
+| scope-branch-guard | 20 | 承認ブランチへの push 許可 / `main` と `master` への push 拒否 / `refs/heads/main` 形式の拒否 / 現在ブランチが `main` のときの引数なし push 拒否 / `--force` `-f` `--force-with-lease` `+refspec` `--mirror` の拒否 / 削除 push・`--all`・`--tags` の拒否 / 承認外ブランチの拒否 / `gitOperations.push=false` の拒否 / 承認範囲なしでも `main` と force を拒否 / PowerShell 経由の拒否 |
+| scope-file-guard | 27 | 範囲内 Edit の許可 / 範囲外の拒否 / `denyPaths` 優先 / Write・NotebookEdit / 作業ディレクトリ外 / パス欠落 / 承認範囲なしは判定しない / リダイレクト（`>` `>>`）/ `tee` / `/dev/null` の許可 / `sed -i` / ワイルドカード / `prettier --write` / `bash -c` `sh -c` / 絶対パス実行 / `npx` / PowerShell の `Set-Content` `Out-File` `Add-Content` |
+| secret-scan-precommit | 12 | commit 以外は判定しない / 差分が空 / クリーンな差分の許可 / GitHub トークン・AWS キー・代入形式・接続文字列・秘密鍵ブロック・禁止固有名の拒否 / `git commit -a` の作業ツリー検査 / **値そのものを stderr に出さないこと** / git が使えない場所での拒否 |
+| 異常系（4 Hook × 6） | 24 | 空入力 / 不正 JSON / 配列 / `tool_name` 欠落 / `tool_input` 欠落 / `null` → すべて exit 2 |
+| ベースライン保護（承認範囲ファイルなし） | 14 | 承認範囲がない状態でも `.claude/hooks/**`・`.claude/settings.json`・`.claude/rules/**`・`CLAUDE.md`・`.git/**`・`.gitattributes`・`.gitignore` へのシェル経由の書き込み（リダイレクト / `tee` / `sed -i` / PowerShell）を拒否すること / 作業ツリー外への書き込みの拒否 / 通常ファイルの `Edit` は判定しないこと |
+| Windows 互換性 | 4 | `node` での起動 / Windows 絶対パス / バックスラッシュ区切りの正規化 / **exit 1 にならないこと** |
+
+テスト設計の方針：
+
+- **実際の GitHub や本番環境へは一切送信しない。**
+  一時ディレクトリにローカル Git リポジトリを作り、origin には実在しない
+  ホストの URL を設定する（`git remote get-url` は通信しない）。
+- 承認範囲ファイルも一時ディレクトリに置き、環境変数で Hook に渡す。
+- テスト用の「秘密情報」はすべて架空の値であり、
+  **ソース上に literal で現れないよう文字列連結で組み立てている。**
+  そうしないと、このリポジトリ自身の `secret-scan-precommit` が
+  テストファイルの commit を拒否してしまう（実際に一度検出された。
+  Hook が機能していることの裏付けでもある）。
+- リポジトリ名のフィクスチャは `example-owner/example-repo` 等の中立な値を使い、
+  実在の所有者名を再導入しない。
+
+開発中に検出し修正した不具合：
+
+1. `sed -i s/a/b/ <file>` で、sed のスクリプト部分（`s/a/b/`）を
+   対象ファイルと誤認して拒否していた。`-e` / `-f` が無い場合は
+   最初の非フラグ引数をスクリプトとして除外するよう修正。
+2. `gh --repo owner/repo` の正規化で、すでに `owner/repo` 形式の値を
+   URL として解析してしまい `repo` だけを取り出していた。
+   `owner/repo` 形式をそのまま返すよう修正。
+   併せて `--repo` の照合を**書き込み操作のみ**に限定した
+   （読み取りを他リポジトリで行うことは害がないため）。
+
+### 11-9. 定義テスト
+
+`tests/definitions/run-tests.js`。エージェント・スキル・permission 設定・
+ルール文書・公開可否・Windows 互換性を検証する。
+**318 件すべて通過**（最終実行時）。
+
+| 区分 | 件数 | 内容 |
+| :- | -: | :- |
+| エージェント定義 | 65 | 7 件存在すること / frontmatter が解析できること / `name` と `description` の存在 / `name` がファイル名と一致 / 重複なし / 本文の分量 |
+| 役割制限（`tools`） | 24 | `architect` / `reviewer` / `tester` / `security` / `uiux-designer` / `orchestrator` が `Edit` `Write` `NotebookEdit` を**持たない**こと / `developer` が持つこと / 編集ツールを持つのが `developer` だけであること / `orchestrator` が `Agent` を持つこと |
+| 本文の必須記述 | 19 | 各エージェントに「承認範囲を広げない」旨があること / `tester` のテスト書き換え禁止・未実施を PASS としない旨 / `security` の値そのものを出さない旨 / `uiux-designer` の原則 3 案・根拠のないブランド要素の禁止 |
+| Orchestrator の振分け | 26 | 割当表の役割すべてに定義が存在すること / **全専門エージェントが割当表から到達できること**（到達不能な定義を作らない） / 事前手順 4 つの存在と順序 / 承認 7 項目・第 6 項・STOP 条件の参照 / 完了報告の参照 |
+| スキル定義 | 65 | 7 件存在すること / `SKILL.md` の存在 / frontmatter / `name` がディレクトリ名と一致 / 重複なし / 500 行未満 / 予約名でないこと / 組み込みの `code-review` と衝突しないこと |
+| `settings.json` | 49 | JSON として妥当 / `allow` が空 / `deny` と `ask` の件数 / `bypassPermissions` を使っていないこと / 必須 `deny` 12 件と必須 `ask` 7 件の存在 / `allow` に Git 書き込みが無いこと / ルール形式と重複 / Hooks 4 件の登録・`node` + `args` 形式・`onFailure: block`・`timeout`・スクリプトの実在・matcher |
+| 重要ルールの残存 | 16 |
+| 文書と実態の一致 | 32 | `CLAUDE.md` と本書のエージェント・スキル件数が実ファイル数と一致すること / 構成図に全定義ファイルが載っていること / 役割の名簿に実体のない役割が無いこと / Hooks や `agents/` を「未実装」「未作成」と書いたままにしていないこと / **実機での発火が未確認であることが明記されていること**（過大報告の防止） | 1-a / 1-b / force push 禁止 / PR merge は人間 / auto-merge 禁止 / タスクスコープ承認と 7 項目 / STOP 条件と自己解除の禁止 / 未実施を PASS としない / UI/UX とガード限界の要点 / 判定基準 |
+| 常時読み込み容量 | 2 | 合計が 75,000 bytes 未満であること / `rules/` に frontmatter が無いこと（あると常時読み込みにならない） |
+| 公開可否 | 1 | 追跡対象の `.md` / `.json` / `.js` 全件に、認証情報・代入形式の秘密情報・接続文字列・メールアドレス・IPv4・個人のファイルパス・禁止固有名が無いこと |
+| 検査パターンの自己テスト | 14 | 上記 6 パターンが**該当文字列を実際に検出すること**（空振りしていないこと）/ 文書中のプレースホルダや架空の記入例を誤検出しないこと / 実行時ユーザー名を取得できていること |
+| Windows 互換性 | 4 | `.gitattributes` の存在 / 定義ファイルに BOM が無いこと / UTF-8 として読めること / Windows で使えないファイル名が無いこと |
+| Markdown の相対リンク | 1 | 全リンクが解決すること |
+
+テスト設計の方針：
+
+- **禁止固有名のリストをリポジトリ内に置かない。**
+  置けばそれ自体が公開対象になってしまう。
+  `AI_WORKBENCH_FORBIDDEN_NAMES`（JSON 配列のファイル）または
+  `~/.claude/ai-workbench/forbidden-names.json` から読む。
+  未提供の場合は汎用パターンのみで検査し、**検査が不完全であることを出力する。**
+- **実行中のユーザー名もファイルに書かない。** `os.userInfo()` で実行時に取得し、
+  ホームディレクトリ由来のパスが混入していないかを見る。
+- 検査パターンは**自己テストを持つ**。既知の該当文字列を検出できることと、
+  正常な記述を誤検出しないことの両方を確認する。
+  これがないと「パターンが壊れていて何も検出しない」状態を PASS と誤認する。
+
+開発中に検出し修正した不具合：
+
+1. ブロックコメント内の `.claude/skills/*/SKILL.md` の `*/` が
+   コメントを途中で閉じ、構文エラーになっていた。
+2. 個人パス検査のパターンをファイルに literal で書いたため、
+   **検査パターン自身が検査に引っかかった。** 実行時取得と文字コード組み立てに変更。
+3. 同パターンが広すぎ、文書中のプレースホルダ `C:\Users\x` を誤検出した。
+   3 文字以上かつ既知のプレースホルダを除外するよう修正。
+4. `reviewer` / `security` / `tester` / `uiux-designer` の 4 件に
+   「承認範囲を広げない」旨の記述が無かった。4 件に追記して再テスト。
+
+### 11-10. テストの実行
+
+```
+node tests/run-all.js
+```
+
+`tests/hooks/run-tests.js`（113 件）と `tests/definitions/run-tests.js`（318 件）を
+順に実行する。**合計 431 件。**
+
+いずれも外部への送信を行わない。実際の `main` / 本番環境 / 共有環境は使用しない。

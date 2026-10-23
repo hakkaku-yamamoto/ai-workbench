@@ -42,10 +42,10 @@
       "Edit(.env.local)",
       "Edit(.env.production)",
       "Edit(.env.prod)",
+      "Edit(.claude/hooks/**)",
       "Edit(.git/**)",
       "Edit(secrets/**)",
       "Edit(credentials/**)",
-
       "Bash(rm -rf *)",
       "Bash(rm -fr *)",
       "Bash(rm -r *)",
@@ -53,7 +53,6 @@
       "Bash(find * -delete*)",
       "Bash(find * -exec rm *)",
       "Bash(shred *)",
-
       "Bash(git reset --hard *)",
       "Bash(git clean -f *)",
       "Bash(git clean -fd *)",
@@ -73,7 +72,6 @@
       "Bash(git restore *)",
       "Bash(git stash drop*)",
       "Bash(git stash clear*)",
-
       "Bash(git push --force *)",
       "Bash(git push -f *)",
       "Bash(git push --force-with-lease *)",
@@ -87,13 +85,11 @@
       "Bash(git push origin --delete *)",
       "Bash(git push * --delete *)",
       "Bash(git branch -D *)",
-
       "Bash(git tag -d *)",
       "Bash(git tag --delete *)",
       "Bash(git push --tags*)",
       "Bash(git push * --tags*)",
       "Bash(git push * --follow-tags*)",
-
       "Bash(gh pr merge *)",
       "Bash(gh repo delete *)",
       "Bash(gh repo edit *)",
@@ -124,7 +120,6 @@
       "Bash(gh api --method PATCH *)",
       "Bash(gh api -X POST *)",
       "Bash(gh api --method POST *)",
-
       "Bash(terraform apply *)",
       "Bash(terraform destroy *)",
       "Bash(pulumi up *)",
@@ -142,7 +137,6 @@
       "Bash(twine upload *)",
       "Bash(cargo publish *)",
       "Bash(gem push *)",
-
       "Bash(vercel --prod*)",
       "Bash(vercel deploy --prod*)",
       "Bash(vercel promote *)",
@@ -170,7 +164,6 @@
       "Bash(heroku pg:reset *)",
       "Bash(heroku releases:rollback *)",
       "Bash(heroku run *)",
-
       "Bash(aws * delete*)",
       "Bash(aws * create*)",
       "Bash(aws * put*)",
@@ -217,7 +210,6 @@
       "Bash(helm uninstall *)",
       "Bash(helm delete *)",
       "Bash(helm rollback *)",
-
       "Bash(prisma migrate*)",
       "Bash(prisma db push*)",
       "Bash(alembic upgrade*)",
@@ -234,7 +226,6 @@
       "Bash(createdb *)",
       "Bash(pg_restore *)",
       "Bash(mysqladmin *)",
-
       "Bash(chmod 777 *)",
       "Bash(chmod 666 *)",
       "Bash(chmod a+w *)",
@@ -245,7 +236,6 @@
       "Bash(setfacl *)",
       "Bash(sudo *)",
       "Bash(runas *)",
-
       "PowerShell(Remove-Item -Recurse *)",
       "PowerShell(Remove-Item * -Recurse*)",
       "PowerShell(Remove-ItemProperty *)",
@@ -427,6 +417,56 @@
       "PowerShell(psql *)",
       "PowerShell(mysql *)",
       "PowerShell(sqlite3 *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/scope-repo-guard.js"
+            ],
+            "timeout": 30,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/scope-branch-guard.js"
+            ],
+            "timeout": 30,
+            "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/secret-scan-precommit.js"
+            ],
+            "timeout": 120,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/scope-file-guard.js"
+            ],
+            "timeout": 30,
+            "onFailure": "block"
+          }
+        ]
+      }
     ]
   }
 }
